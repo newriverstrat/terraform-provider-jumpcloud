@@ -51,6 +51,37 @@ func resourceAuthenticationPolicy() *schema.Resource {
 				Optional:    true,
 				Default:     false,
 			},
+			"effect": {
+				Description: "The policy's action when it applies: \"allow\", " +
+					"\"deny\", or \"allow_with_mfa\" (confirmed via JumpCloud's own " +
+					"jc-cli source -- its Policy simulation model documents exactly " +
+					"these three values; the API itself returned a 400 " +
+					"\"missing effect\" when this field was absent, confirming it's " +
+					"required).",
+				Type:     schema.TypeString,
+				Required: true,
+			},
+			"target_all_users": {
+				Description: "Apply this policy to all users. Without this (or " +
+					"target_user_groups) set, a policy matches no one and is " +
+					"silently inert even if enabled -- confirmed via jc-cli's own " +
+					"policy-evaluation logic.",
+				Type:     schema.TypeBool,
+				Optional: true,
+				Default:  false,
+			},
+			"target_user_groups": {
+				Description: "JumpCloud user group IDs this policy targets.",
+				Type:        schema.TypeList,
+				Optional:    true,
+				Elem:        &schema.Schema{Type: schema.TypeString},
+			},
+			"target_applications": {
+				Description: "JumpCloud application IDs this policy targets.",
+				Type:        schema.TypeList,
+				Optional:    true,
+				Elem:        &schema.Schema{Type: schema.TypeString},
+			},
 			"conditions_json": {
 				Description: "The policy's conditions tree, as a raw JSON string. " +
 					"No typed schema is exposed for this -- its shape isn't " +
@@ -131,6 +162,23 @@ func resourceAuthenticationPolicyRead(d *schema.ResourceData, meta interface{}) 
 			return err
 		}
 	}
+	if v, ok := raw["effect"].(string); ok {
+		if err := d.Set("effect", v); err != nil {
+			return err
+		}
+	}
+	if targets, ok := raw["targets"].(map[string]interface{}); ok {
+		allUsers, _ := targets["allUsers"].(bool)
+		if err := d.Set("target_all_users", allUsers); err != nil {
+			return err
+		}
+		if err := d.Set("target_user_groups", stringSliceFromAny(targets["userGroups"])); err != nil {
+			return err
+		}
+		if err := d.Set("target_applications", stringSliceFromAny(targets["applications"])); err != nil {
+			return err
+		}
+	}
 	if cond, ok := raw["conditions"]; ok && cond != nil {
 		b, err := json.Marshal(cond)
 		if err != nil {
@@ -200,8 +248,15 @@ func buildAuthPolicyRequestBody(seed map[string]interface{}, d *schema.ResourceD
 
 	body["name"] = d.Get("name").(string)
 	body["disabled"] = d.Get("disabled").(bool)
+	body["effect"] = d.Get("effect").(string)
 	if v, ok := d.GetOk("type"); ok {
 		body["type"] = v.(string)
+	}
+
+	body["targets"] = map[string]interface{}{
+		"allUsers":     d.Get("target_all_users").(bool),
+		"userGroups":   stringSliceFromInterfaceList(d.Get("target_user_groups").([]interface{})),
+		"applications": stringSliceFromInterfaceList(d.Get("target_applications").([]interface{})),
 	}
 
 	if v, ok := d.GetOk("conditions_json"); ok {
@@ -218,4 +273,31 @@ func buildAuthPolicyRequestBody(seed map[string]interface{}, d *schema.ResourceD
 	}
 
 	return body, nil
+}
+
+// stringSliceFromInterfaceList converts a Terraform TypeList of strings
+// (as returned by d.Get) into a []string.
+func stringSliceFromInterfaceList(raw []interface{}) []string {
+	out := make([]string, 0, len(raw))
+	for _, v := range raw {
+		out = append(out, v.(string))
+	}
+	return out
+}
+
+// stringSliceFromAny converts a raw JSON array value (as decoded into
+// []interface{} by encoding/json) into a []string, for setting into a
+// Terraform TypeList. A missing or non-array value yields an empty slice.
+func stringSliceFromAny(raw interface{}) []string {
+	arr, ok := raw.([]interface{})
+	if !ok {
+		return nil
+	}
+	out := make([]string, 0, len(arr))
+	for _, v := range arr {
+		if s, ok := v.(string); ok {
+			out = append(out, s)
+		}
+	}
+	return out
 }
