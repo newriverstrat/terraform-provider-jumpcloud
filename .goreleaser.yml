@@ -51,6 +51,9 @@ signs:
       - "--detach-sign"
       - "${artifact}"
 release:
+  # Tags carrying a prerelease suffix (v1.1.0-rc.1) are marked as prereleases on
+  # GitHub; plain versions are marked as full releases.
+  prerelease: auto
   extra_files:
     - glob: 'terraform-registry-manifest.json'
       name_template: '{{ .ProjectName }}_{{ .Version }}_manifest.json'

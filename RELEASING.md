@@ -74,11 +74,48 @@ git push origin v1.0.0
 ```
 
 The `release` workflow then builds every platform, signs the checksums, and creates the GitHub
-release. The registry ingests it within a few minutes. If the workflow fails after the tag is
-already pushed, re-run it from the Actions tab (`workflow_dispatch`) rather than deleting and
-re-pushing the tag.
+release. The registry ingests it within a few minutes.
 
 Verify at `https://registry.terraform.io/providers/newriverstrat/jumpcloud/latest`.
+
+## Prerelease / test builds from an arbitrary revision
+
+To publish a build of a branch, tag or SHA — e.g. to install a fix in a real workspace before
+committing to a release — run the `release` workflow manually:
+
+**Actions → release → Run workflow**, with:
+
+| Input | Example | |
+|---|---|---|
+| `revision` | `chore/some-fix`, or a SHA | The revision to build. Defaults to `nrs-master`. |
+| `version` | `v1.1.0-rc.1` | The version to publish. Must be semver and must not already exist. |
+
+The workflow creates the tag at that revision for you and publishes from it. A version with a
+prerelease suffix is marked as a prerelease on GitHub (`prerelease: auto` in `.goreleaser.yml`).
+
+Consume a prerelease by pinning it exactly — Terraform will not select a prerelease from a range
+constraint:
+
+```hcl
+jumpcloud = {
+  source  = "newriverstrat/jumpcloud"
+  version = "1.1.0-rc.1"
+}
+```
+
+Two things to know:
+
+- **Versions are immutable once the registry has ingested them.** You cannot re-publish
+  `v1.1.0-rc.1` with different code — bump to `-rc.2`. The workflow refuses to reuse an existing
+  tag for this reason.
+- **The tag is real and stays behind.** Prerelease tags accumulate in the repo; delete them (tag
+  and GitHub release) once the final version ships, if you want the history tidy.
+
+### Re-running a failed release
+
+If a run fails *after* the tag was pushed, re-run it from the Actions tab against that existing
+tag — don't delete and re-push the tag. Note the manual form above refuses an existing version,
+so use the Actions "Re-run jobs" button on the original run rather than dispatching a new one.
 
 ## Consuming it
 
