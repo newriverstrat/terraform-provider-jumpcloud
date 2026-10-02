@@ -60,9 +60,13 @@ func Provider() *schema.Provider {
 			//     back, including its server-controlled readOnly flag
 			//     (jumpcloud_push_settings); JumpCloud Go (DURT) is a flat
 			//     singleton with no id, like the enrollment policy above
-			//     (jumpcloud_durt_settings). A factor type must be enabled via
-			//     jumpcloud_mfa_factor before any policy below can reference it
-			//     in its MFA requirement.
+			//     (jumpcloud_durt_settings); TOTP has no settings/config object
+			//     of its own at all -- jumpcloud_mfa_factor is the entire story
+			//     for it, and whether it even appears as a standalone factor is
+			//     controlled by jumpcloud_push_settings' is_totp_integrated
+			//     field ("combined" vs "separate" in the console UI). A factor
+			//     type must be enabled via jumpcloud_mfa_factor before any
+			//     policy below can reference it in its MFA requirement.
 			//       jumpcloud_mfa_factor, jumpcloud_webauthn_settings,
 			//       jumpcloud_push_settings, jumpcloud_durt_settings
 			//

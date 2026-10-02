@@ -62,9 +62,12 @@ func resourcePushSettings() *schema.Resource {
 				Default:  1,
 			},
 			"is_totp_integrated": {
-				Description: "Whether this push factor also serves as a TOTP " +
-					"integration. Exact semantics unconfirmed beyond the " +
-					"observed default (true) -- verify live before changing it.",
+				Description: "Controls \"combined\" (true) vs \"separate\" " +
+					"(false) TOTP behavior -- confirmed live: setting this to " +
+					"false is what causes TOTP to appear as its own standalone " +
+					"factor (managed via jumpcloud_mfa_factor with " +
+					"factor_type = \"totp\") rather than being combined into " +
+					"this push factor.",
 				Type:     schema.TypeBool,
 				Optional: true,
 				Default:  true,

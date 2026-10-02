@@ -41,10 +41,10 @@ func resourceMfaFactor() *schema.Resource {
 		},
 		Schema: map[string]*schema.Schema{
 			"factor_type": {
-				Description: "The MFA factor type. Confirmed value from a live " +
-					"capture: \"webauthn\". The full set of valid factor type " +
-					"strings (e.g. \"totp\", \"push\", \"sms\") is not confirmed " +
-					"-- verify each one live before relying on it.",
+				Description: "The MFA factor type. Confirmed values from live " +
+					"captures: \"webauthn\" and \"totp\". The full set of valid " +
+					"factor type strings (e.g. \"push\", \"sms\") is not " +
+					"confirmed -- verify each one live before relying on it.",
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,
@@ -54,6 +54,14 @@ func resourceMfaFactor() *schema.Resource {
 				Type:        schema.TypeBool,
 				Optional:    true,
 				Default:     true,
+			},
+			"read_only": {
+				Description: "Whether this factor's enabled state is " +
+					"server-controlled and can't be changed (e.g. a factor " +
+					"JumpCloud always keeps available). Confirmed present on a " +
+					"live GET response; semantics beyond that aren't confirmed.",
+				Type:     schema.TypeBool,
+				Computed: true,
 			},
 		},
 	}
@@ -91,10 +99,11 @@ func resourceMfaFactorRead(d *schema.ResourceData, meta interface{}) error {
 			d.SetId("")
 			return nil
 		}
-		// GET on this endpoint is not confirmed to be supported (it was only
-		// ever observed as a PUT target). Don't fail plan/apply over it --
-		// leave the already-recorded state as the source of truth, since the
-		// write path is the part that's actually confirmed to work.
+		// GET is confirmed to work for webauthn and totp (a live capture of
+		// the latter returned {"type":"totp","enabled":true,"id":"",
+		// "readOnly":false}), but not every factor_type is verified yet.
+		// Don't fail plan/apply over an unverified one -- leave the
+		// already-recorded state as the source of truth.
 		log.Printf("[WARN] skipping refresh for mfa factor %s: %s", d.Id(), err)
 		return nil
 	}
@@ -104,6 +113,11 @@ func resourceMfaFactorRead(d *schema.ResourceData, meta interface{}) error {
 	}
 	if v, ok := raw["enabled"].(bool); ok {
 		if err := d.Set("enabled", v); err != nil {
+			return err
+		}
+	}
+	if v, ok := raw["readOnly"].(bool); ok {
+		if err := d.Set("read_only", v); err != nil {
 			return err
 		}
 	}
