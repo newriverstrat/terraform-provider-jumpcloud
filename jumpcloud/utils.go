@@ -155,6 +155,30 @@ func jcListRaw(basePath, apiKey, path string) ([]map[string]interface{}, error) 
 	return decoded.Results, nil
 }
 
+// jcListArrayRaw fetches a v2 list endpoint that returns a bare JSON array
+// directly (confirmed live for /push/configs and /webauthn/configs), unlike
+// v1 list endpoints (jcListRaw), which wrap results in a "results" key.
+func jcListArrayRaw(basePath, apiKey, path string) ([]map[string]interface{}, error) {
+	client := resty.New().SetDebug(true)
+	resp, err := client.R().
+		SetHeader("x-api-key", apiKey).
+		SetHeader("Accept", "application/json").
+		Get(basePath + path)
+	if err != nil {
+		return nil, err
+	}
+	if resp.IsError() {
+		return nil, fmt.Errorf("error listing %s: %s; body: %s",
+			path, resp.Status(), strings.TrimSpace(string(resp.Body())))
+	}
+
+	var decoded []map[string]interface{}
+	if err := json.Unmarshal(resp.Body(), &decoded); err != nil {
+		return nil, fmt.Errorf("error decoding response from %s: %w", path, err)
+	}
+	return decoded, nil
+}
+
 // jcWriteRaw POSTs, PUTs, or DELETEs a raw JSON body against a v1 or v2
 // JumpCloud endpoint. Some V2 endpoints answer a successful write with 204 and
 // an empty body, so an empty response body is treated as success rather than

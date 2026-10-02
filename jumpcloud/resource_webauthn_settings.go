@@ -61,7 +61,7 @@ func resolveWebauthnConfigId(config *jcapiv2.Configuration, d *schema.ResourceDa
 	}
 
 	apiKey := config.DefaultHeader["x-api-key"]
-	configs, err := jcListRaw(config.BasePath, apiKey, "/webauthn/configs")
+	configs, err := jcListArrayRaw(config.BasePath, apiKey, "/webauthn/configs")
 	if err != nil {
 		return "", err
 	}

@@ -89,7 +89,7 @@ func resolvePushConfigId(config *jcapiv2.Configuration, d *schema.ResourceData) 
 	}
 
 	apiKey := config.DefaultHeader["x-api-key"]
-	configs, err := jcListRaw(config.BasePath, apiKey, "/push/configs")
+	configs, err := jcListArrayRaw(config.BasePath, apiKey, "/push/configs")
 	if err != nil {
 		return "", err
 	}
