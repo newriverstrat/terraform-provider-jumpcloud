@@ -12,20 +12,25 @@ import (
 // resourceAuthenticationPolicy manages a JumpCloud authentication policy
 // (JumpCloud's conditional-access policy engine, at /authn/policies in the v2
 // API). This is the current, documented mechanism for requiring MFA on user
-// logins -- confirmed against TheJumpCloud/jc-cli, JumpCloud's own actively
-// maintained CLI -- since jcapi-go (this provider's Go SDK dependency, with no
-// real code change since 2019) has no knowledge of this endpoint at all.
+// logins -- jcapi-go (this provider's Go SDK dependency, with no real code
+// change since 2019) has no knowledge of this endpoint at all, and
+// JumpCloud's own actively maintained CLI (TheJumpCloud/jc-cli) turned out
+// not to be a reliable reference for this specific area either: its
+// `auth-policies create` command builds a body shape that the live API
+// rejects (confirmed live: a 400 "missing effect", then a second 400 with
+// `effect` present as a string instead of an object), and its tests for that
+// command run against a mocked local server, not the real API. Authentication
+// Policies wasn't one of jc-cli's specially live-verified areas.
 //
-// The conditions tree (who/what the policy applies to) is exposed as a raw
-// JSON string rather than a typed schema: jc-cli itself treats it as an opaque
-// JSON passthrough with no typed model, and there's no confirmed schema for it
-// to build against without guessing.
+// The schema below is instead built from a captured browser request (the
+// JumpCloud console's own Authentication Policies UI), which is the only
+// confirmed-correct source for this endpoint's real shape.
 func resourceAuthenticationPolicy() *schema.Resource {
 	return &schema.Resource{
 		Description: "Manages a JumpCloud authentication policy (conditional " +
-			"access / MFA enforcement). See https://github.com/TheJumpCloud/jc-cli " +
-			"for reference -- this provider's underlying Go SDK has no model for " +
-			"this endpoint at all.",
+			"access / MFA enforcement). Built from a captured browser request " +
+			"against the JumpCloud console -- neither this provider's Go SDK nor " +
+			"JumpCloud's own jc-cli reliably document this endpoint's shape.",
 		Create: resourceAuthenticationPolicyCreate,
 		Read:   resourceAuthenticationPolicyRead,
 		Update: resourceAuthenticationPolicyUpdate,
@@ -39,6 +44,11 @@ func resourceAuthenticationPolicy() *schema.Resource {
 				Type:        schema.TypeString,
 				Required:    true,
 			},
+			"description": {
+				Description: "Policy description.",
+				Type:        schema.TypeString,
+				Optional:    true,
+			},
 			"type": {
 				Description: "Policy type, e.g. \"user_portal\" or \"admin\".",
 				Type:        schema.TypeString,
@@ -51,47 +61,30 @@ func resourceAuthenticationPolicy() *schema.Resource {
 				Optional:    true,
 				Default:     false,
 			},
-			"effect": {
-				Description: "The policy's action when it applies: \"allow\", " +
-					"\"deny\", or \"allow_with_mfa\" (confirmed via JumpCloud's own " +
-					"jc-cli source -- its Policy simulation model documents exactly " +
-					"these three values; the API itself returned a 400 " +
-					"\"missing effect\" when this field was absent, confirming it's " +
-					"required).",
-				Type:     schema.TypeString,
-				Required: true,
-			},
-			"target_all_users": {
-				Description: "Apply this policy to all users. Without this (or " +
-					"target_user_groups) set, a policy matches no one and is " +
-					"silently inert even if enabled -- confirmed via jc-cli's own " +
-					"policy-evaluation logic.",
+			"monitor_only": {
+				Description: "Evaluate the policy and log the outcome without " +
+					"actually enforcing it. Useful for testing a policy's reach " +
+					"before it affects logins.",
 				Type:     schema.TypeBool,
 				Optional: true,
 				Default:  false,
 			},
-			"target_user_groups": {
-				Description: "JumpCloud user group IDs this policy targets.",
-				Type:        schema.TypeList,
-				Optional:    true,
-				Elem:        &schema.Schema{Type: schema.TypeString},
-			},
-			"target_applications": {
-				Description: "JumpCloud application IDs this policy targets.",
-				Type:        schema.TypeList,
-				Optional:    true,
-				Elem:        &schema.Schema{Type: schema.TypeString},
-			},
 			"conditions_json": {
 				Description: "The policy's conditions tree, as a raw JSON string. " +
-					"No typed schema is exposed for this -- its shape isn't " +
-					"confirmed, and JumpCloud's own actively maintained CLI " +
-					"(jc-cli) treats it as opaque JSON too. Leave unset for a " +
-					"policy with no conditions (applies unconditionally, if " +
-					"JumpCloud's API accepts an absent/empty conditions tree -- " +
-					"verify this live before relying on it).",
+					"No typed schema is exposed for this -- confirmed via a " +
+					"captured browser request to be an object ({} for no " +
+					"conditions), but its shape beyond that isn't confirmed.",
 				Type:     schema.TypeString,
 				Optional: true,
+				Default:  "{}",
+			},
+			"effect_action": {
+				Description: "The base access decision when this policy applies: " +
+					"confirmed value from a live capture is \"allow\" (MFA and " +
+					"other requirements are layered on via the mfa_* / " +
+					"user_verification fields below, not via this value).",
+				Type:     schema.TypeString,
+				Required: true,
 			},
 			"mfa_required": {
 				Description: "Require MFA under this policy.",
@@ -99,11 +92,50 @@ func resourceAuthenticationPolicy() *schema.Resource {
 				Optional:    true,
 				Default:     false,
 			},
-			"mfa_allow_enrollment": {
-				Description: "Allow MFA self-enrollment under this policy.",
-				Type:        schema.TypeBool,
+			"mfa_factors": {
+				Description: "Acceptable MFA factor types, e.g. [\"TOTP\", " +
+					"\"PUSH\", \"DURT\"] (confirmed values from a live capture; " +
+					"the full set of valid factor type strings is not confirmed).",
+				Type:     schema.TypeList,
+				Optional: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+			"mfa_factor_selection_mode": {
+				Description: "How mfa_factors are combined, e.g. \"all\" " +
+					"(confirmed value from a live capture; other possible values " +
+					"are not confirmed).",
+				Type:     schema.TypeString,
+				Optional: true,
+				Default:  "all",
+			},
+			"user_verification_requirement": {
+				Description: "WebAuthn user verification requirement, e.g. " +
+					"\"none\" (confirmed value from a live capture; other " +
+					"possible values are not confirmed).",
+				Type:     schema.TypeString,
+				Optional: true,
+				Default:  "none",
+			},
+			"target_resource_types": {
+				Description: "Resource types this policy targets, e.g. " +
+					"[\"user_portal\"].",
+				Type:     schema.TypeList,
+				Optional: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+			"target_user_inclusions": {
+				Description: "Which users this policy targets: [\"all\"] for " +
+					"everyone, or specific user/group identifiers (shape beyond " +
+					"\"all\" is not confirmed).",
+				Type:     schema.TypeList,
+				Optional: true,
+				Elem:     &schema.Schema{Type: schema.TypeString},
+			},
+			"target_excluded_applications": {
+				Description: "Application IDs excluded from this policy's targets.",
+				Type:        schema.TypeList,
 				Optional:    true,
-				Default:     false,
+				Elem:        &schema.Schema{Type: schema.TypeString},
 			},
 		},
 	}
@@ -152,6 +184,11 @@ func resourceAuthenticationPolicyRead(d *schema.ResourceData, meta interface{}) 
 			return err
 		}
 	}
+	if v, ok := raw["description"].(string); ok {
+		if err := d.Set("description", v); err != nil {
+			return err
+		}
+	}
 	if v, ok := raw["type"].(string); ok {
 		if err := d.Set("type", v); err != nil {
 			return err
@@ -162,20 +199,8 @@ func resourceAuthenticationPolicyRead(d *schema.ResourceData, meta interface{}) 
 			return err
 		}
 	}
-	if v, ok := raw["effect"].(string); ok {
-		if err := d.Set("effect", v); err != nil {
-			return err
-		}
-	}
-	if targets, ok := raw["targets"].(map[string]interface{}); ok {
-		allUsers, _ := targets["allUsers"].(bool)
-		if err := d.Set("target_all_users", allUsers); err != nil {
-			return err
-		}
-		if err := d.Set("target_user_groups", stringSliceFromAny(targets["userGroups"])); err != nil {
-			return err
-		}
-		if err := d.Set("target_applications", stringSliceFromAny(targets["applications"])); err != nil {
+	if v, ok := raw["monitorOnly"].(bool); ok {
+		if err := d.Set("monitor_only", v); err != nil {
 			return err
 		}
 	}
@@ -188,13 +213,68 @@ func resourceAuthenticationPolicyRead(d *schema.ResourceData, meta interface{}) 
 			return err
 		}
 	}
-	if mfa, ok := raw["mfa"].(map[string]interface{}); ok {
-		required, _ := mfa["required"].(bool)
-		if err := d.Set("mfa_required", required); err != nil {
-			return err
+
+	if effect, ok := raw["effect"].(map[string]interface{}); ok {
+		if v, ok := effect["action"].(string); ok {
+			if err := d.Set("effect_action", v); err != nil {
+				return err
+			}
 		}
-		allowEnrollment, _ := mfa["allowEnrollment"].(bool)
-		if err := d.Set("mfa_allow_enrollment", allowEnrollment); err != nil {
+		if obligations, ok := effect["obligations"].(map[string]interface{}); ok {
+			if mfa, ok := obligations["mfa"].(map[string]interface{}); ok {
+				required, _ := mfa["required"].(bool)
+				if err := d.Set("mfa_required", required); err != nil {
+					return err
+				}
+			}
+			if uv, ok := obligations["userVerification"].(map[string]interface{}); ok {
+				if v, ok := uv["requirement"].(string); ok {
+					if err := d.Set("user_verification_requirement", v); err != nil {
+						return err
+					}
+				}
+			}
+			if v, ok := obligations["mfaFactorSelectionMode"].(string); ok {
+				if err := d.Set("mfa_factor_selection_mode", v); err != nil {
+					return err
+				}
+			}
+			if factors, ok := obligations["mfaFactors"].([]interface{}); ok {
+				types := make([]string, 0, len(factors))
+				for _, f := range factors {
+					if fm, ok := f.(map[string]interface{}); ok {
+						if t, ok := fm["type"].(string); ok {
+							types = append(types, t)
+						}
+					}
+				}
+				if err := d.Set("mfa_factors", types); err != nil {
+					return err
+				}
+			}
+		}
+	}
+
+	if targets, ok := raw["targets"].(map[string]interface{}); ok {
+		if resources, ok := targets["resources"].([]interface{}); ok {
+			types := make([]string, 0, len(resources))
+			for _, r := range resources {
+				if rm, ok := r.(map[string]interface{}); ok {
+					if t, ok := rm["type"].(string); ok {
+						types = append(types, t)
+					}
+				}
+			}
+			if err := d.Set("target_resource_types", types); err != nil {
+				return err
+			}
+		}
+		if users, ok := targets["users"].(map[string]interface{}); ok {
+			if err := d.Set("target_user_inclusions", stringSliceFromAny(users["inclusions"])); err != nil {
+				return err
+			}
+		}
+		if err := d.Set("target_excluded_applications", stringSliceFromAny(targets["excludedApplications"])); err != nil {
 			return err
 		}
 	}
@@ -247,29 +327,52 @@ func buildAuthPolicyRequestBody(seed map[string]interface{}, d *schema.ResourceD
 	}
 
 	body["name"] = d.Get("name").(string)
+	body["description"] = d.Get("description").(string)
 	body["disabled"] = d.Get("disabled").(bool)
-	body["effect"] = d.Get("effect").(string)
+	body["monitorOnly"] = d.Get("monitor_only").(bool)
 	if v, ok := d.GetOk("type"); ok {
 		body["type"] = v.(string)
 	}
 
+	condJSON := d.Get("conditions_json").(string)
+	if condJSON == "" {
+		condJSON = "{}"
+	}
+	var cond interface{}
+	if err := json.Unmarshal([]byte(condJSON), &cond); err != nil {
+		return nil, fmt.Errorf("conditions_json is not valid JSON: %w", err)
+	}
+	body["conditions"] = cond
+
+	mfaFactors := make([]map[string]interface{}, 0)
+	for _, f := range d.Get("mfa_factors").([]interface{}) {
+		mfaFactors = append(mfaFactors, map[string]interface{}{"type": f.(string)})
+	}
+	body["effect"] = map[string]interface{}{
+		"action": d.Get("effect_action").(string),
+		"obligations": map[string]interface{}{
+			"mfa": map[string]interface{}{
+				"required": d.Get("mfa_required").(bool),
+			},
+			"userVerification": map[string]interface{}{
+				"requirement": d.Get("user_verification_requirement").(string),
+			},
+			"mfaFactors":             mfaFactors,
+			"mfaFactorSelectionMode": d.Get("mfa_factor_selection_mode").(string),
+		},
+	}
+
+	resourceTypes := d.Get("target_resource_types").([]interface{})
+	resources := make([]map[string]interface{}, 0, len(resourceTypes))
+	for _, t := range resourceTypes {
+		resources = append(resources, map[string]interface{}{"type": t.(string)})
+	}
 	body["targets"] = map[string]interface{}{
-		"allUsers":     d.Get("target_all_users").(bool),
-		"userGroups":   stringSliceFromInterfaceList(d.Get("target_user_groups").([]interface{})),
-		"applications": stringSliceFromInterfaceList(d.Get("target_applications").([]interface{})),
-	}
-
-	if v, ok := d.GetOk("conditions_json"); ok {
-		var cond interface{}
-		if err := json.Unmarshal([]byte(v.(string)), &cond); err != nil {
-			return nil, fmt.Errorf("conditions_json is not valid JSON: %w", err)
-		}
-		body["conditions"] = cond
-	}
-
-	body["mfa"] = map[string]interface{}{
-		"required":        d.Get("mfa_required").(bool),
-		"allowEnrollment": d.Get("mfa_allow_enrollment").(bool),
+		"resources": resources,
+		"users": map[string]interface{}{
+			"inclusions": stringSliceFromInterfaceList(d.Get("target_user_inclusions").([]interface{})),
+		},
+		"excludedApplications": stringSliceFromInterfaceList(d.Get("target_excluded_applications").([]interface{})),
 	}
 
 	return body, nil
