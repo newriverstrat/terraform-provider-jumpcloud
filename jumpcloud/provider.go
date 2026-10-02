@@ -52,11 +52,19 @@ func Provider() *schema.Provider {
 			//       jumpcloud_mfa_enrollment_policy
 			//
 			//  2. Factor availability -- org-wide: which factor types (TOTP,
-			//     WebAuthn, Push, ...) exist as enrollable options at all for
-			//     this org, plus factor-specific settings (e.g. WebAuthn
-			//     self-registration). A factor type must be enabled here before
-			//     any policy below can reference it in its MFA requirement.
-			//       jumpcloud_mfa_factor, jumpcloud_webauthn_settings
+			//     WebAuthn, Push, JumpCloud Go, ...) exist as enrollable options
+			//     at all for this org (jumpcloud_mfa_factor), plus each factor's
+			//     own "Additional Settings" config object, each with a different
+			//     shape and write pattern: WebAuthn accepts a minimal partial PUT
+			//     (jumpcloud_webauthn_settings); Push requires the full object
+			//     back, including its server-controlled readOnly flag
+			//     (jumpcloud_push_settings); JumpCloud Go (DURT) is a flat
+			//     singleton with no id, like the enrollment policy above
+			//     (jumpcloud_durt_settings). A factor type must be enabled via
+			//     jumpcloud_mfa_factor before any policy below can reference it
+			//     in its MFA requirement.
+			//       jumpcloud_mfa_factor, jumpcloud_webauthn_settings,
+			//       jumpcloud_push_settings, jumpcloud_durt_settings
 			//
 			//  3. Authentication policies -- scoped: conditional-access rules
 			//     that actually grant/deny access and that layer an MFA
@@ -72,6 +80,8 @@ func Provider() *schema.Provider {
 			"jumpcloud_mfa_enrollment_policy": resourceMfaEnrollmentPolicy(),
 			"jumpcloud_mfa_factor":            resourceMfaFactor(),
 			"jumpcloud_webauthn_settings":     resourceWebauthnSettings(),
+			"jumpcloud_push_settings":         resourcePushSettings(),
+			"jumpcloud_durt_settings":         resourceDurtSettings(),
 			"jumpcloud_authentication_policy": resourceAuthenticationPolicy(),
 		},
 		DataSourcesMap: map[string]*schema.Resource{
