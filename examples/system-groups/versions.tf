@@ -1,7 +1,7 @@
 terraform {
   required_providers {
     jumpcloud = {
-      source = "cheelim1/jumpcloud"
+      source = "newriverstrat/jumpcloud"
     }
   }
 }

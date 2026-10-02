@@ -10,7 +10,7 @@ description: |-
 
 The JumpCloud provider provides resources to interact with the JumpCloud API v1 and v2.
 
-This provider is still under development. Feel free to contribute or open an issue by visiting the [GitHub repository](https://github.com/cheelim1/terraform-provider-jumpcloud).
+This is New River Strategies' fork of [cheelim1/terraform-provider-jumpcloud](https://github.com/cheelim1/terraform-provider-jumpcloud), published as `newriverstrat/jumpcloud`. It is still under development. Feel free to contribute or open an issue at the [GitHub repository](https://github.com/newriverstrat/terraform-provider-jumpcloud).
 
 **Note** that due to simplicity this provider does not heavily validate input data except for the most crucial things such as basic type checking. For example, e-mail addresses will not be validate by the provider. However, creating invalid resources is not possible, since the JumpCloud API will reject invalid requests.
 
@@ -20,7 +20,7 @@ This provider is still under development. Feel free to contribute or open an iss
 terraform {
   required_providers {
     jumpcloud = {
-      source = "cheelim1/jumpcloud"
+      source = "newriverstrat/jumpcloud"
     }
   }
 }
