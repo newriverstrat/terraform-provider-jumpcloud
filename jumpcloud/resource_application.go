@@ -43,12 +43,13 @@ func resourceApplication() *schema.Resource {
 			},
 			"active": {
 				Description: "Whether single sign-on is active for this application. JumpCloud " +
-					"shows an inactive application as \"Single Sign-On Inactive\" in the console; " +
-					"this resource never set the field before, so it was left at JumpCloud's own " +
-					"default (inactive) regardless of Terraform config.",
+					"shows an inactive application as \"Single Sign-On Inactive\" in the console. " +
+					"Defaults to false to match this resource's existing behavior (it never set " +
+					"this field before, so it was always left at JumpCloud's own default, " +
+					"inactive) -- set explicitly to true to activate SSO.",
 				Type:     schema.TypeBool,
 				Optional: true,
-				Default:  true,
+				Default:  false,
 			},
 			"display_label": {
 				Description: "Name of the application to display",
