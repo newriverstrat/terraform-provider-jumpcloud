@@ -1,5 +1,11 @@
 # JumpCloud Terraform Provider
 
+This is New River Strategies' fork of
+[cheelim1/terraform-provider-jumpcloud](https://github.com/cheelim1/terraform-provider-jumpcloud),
+published to the Terraform Registry as **`newriverstrat/jumpcloud`**. See
+[`RELEASING.md`](RELEASING.md) for the branch model, how releases are published, and
+how this relates to upstream.
+
 ## Requirements
 
 - [Terraform](https://www.terraform.io/downloads.html) 0.13+
@@ -7,18 +13,18 @@
 
 ## Building The Provider
 
-Clone repository to: `$GOPATH/src/github.com/cheelim1/terraform-provider-jumpcloud`
+Clone repository to: `$GOPATH/src/github.com/newriverstrat/terraform-provider-jumpcloud`
 
 ```sh
-mkdir -p $GOPATH/src/github.com/cheelim1
-cd $GOPATH/src/github.com/cheelim1
-git clone git@github.com:cheelim1/terraform-provider-jumpcloud
+mkdir -p $GOPATH/src/github.com/newriverstrat
+cd $GOPATH/src/github.com/newriverstrat
+git clone git@github.com:newriverstrat/terraform-provider-jumpcloud
 ```
 
 Enter the provider directory and build the provider
 
 ```sh
-cd $GOPATH/src/github.com/cheelim1/terraform-provider-jumpcloud
+cd $GOPATH/src/github.com/newriverstrat/terraform-provider-jumpcloud
 make build
 ```
 
@@ -38,6 +44,3 @@ Export `JUMPCLOUD_ORG_ID` to set it.
 
 ## Run tests
 `ex: go test -v ./... -run TestAccDataSourceJumpCloudUserGroup_basic`
-
-### OpenTofu
-Link: https://github.com/opentofu/registry/tree/main/providers/c/cheelim1
