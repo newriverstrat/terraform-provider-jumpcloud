@@ -87,10 +87,15 @@ func resourceApplication() *schema.Resource {
 				},
 			},
 			"idp_certificate": {
-				Description: "",
-				Type:        schema.TypeString,
-				Required:    true,
-				Sensitive:   true,
+				Description: "Leave unset to have JumpCloud generate and manage its own signing " +
+					"certificate -- confirmed against the live API as the correct way to use this " +
+					"resource; a self-supplied certificate is stored as an opaque string and causes " +
+					"the metadata-XML endpoint to fail with a 500 for every request. Set only if you " +
+					"specifically need to supply your own IdP keypair instead.",
+				Type:      schema.TypeString,
+				Optional:  true,
+				Computed:  true,
+				Sensitive: true,
 			},
 			"idp_entity_id": {
 				Description: "",
@@ -98,10 +103,11 @@ func resourceApplication() *schema.Resource {
 				Required:    true,
 			},
 			"idp_private_key": {
-				Description: "",
-				Type:        schema.TypeString,
-				Required:    true,
-				Sensitive:   true,
+				Description: "Leave unset -- see idp_certificate. Never refreshed by Read even if " +
+					"set: the API always returns this field empty regardless of what's stored.",
+				Type:      schema.TypeString,
+				Optional:  true,
+				Sensitive: true,
 			},
 			"sp_entity_id": {
 				Description: "",
