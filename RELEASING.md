@@ -58,19 +58,21 @@ requires both.
 
 ## Versioning
 
-Our releases use a **`v1.x.x`** series. Upstream is on `v0.3.x`, so this can't be confused
-with theirs even though the two live in different registry namespaces.
+Our releases use a **`v100.x.x`** series, starting at `v100.0.0`. Upstream is on `v0.3.x` and
+realistically will never reach `v100`, so a version number alone tells you unambiguously whose
+release it is — no need to check the namespace.
 
-> **Do not push upstream tags to `origin`.** The release workflow fires on any `v*` tag. If you
-> run `git fetch upstream --tags && git push origin --tags`, you will publish upstream's code
-> under our namespace. Fetch upstream tags only if you need them, and never bulk-push tags.
+This is enforced, not just convention: the release workflow refuses any tag outside `v100.x.x`.
+That also closes a footgun worth knowing about — upstream's tags are reachable from our history,
+so `git fetch upstream --tags && git push origin --tags` would otherwise publish *their* code
+under our namespace. Now such a tag fails the version check before anything is built.
 
 ## Cutting a release
 
 ```bash
 git checkout nrs-master && git pull
-git tag v1.0.0
-git push origin v1.0.0
+git tag v100.0.0
+git push origin v100.0.0
 ```
 
 The `release` workflow then builds every platform, signs the checksums, and creates the GitHub
@@ -88,7 +90,7 @@ committing to a release — run the `release` workflow manually:
 | Input | Example | |
 |---|---|---|
 | `revision` | `chore/some-fix`, or a SHA | The revision to build. Defaults to `nrs-master`. |
-| `version` | `v1.1.0-rc.1` | The version to publish. Must be semver and must not already exist. |
+| `version` | `v100.1.0-rc.1` | The version to publish. Must be in the `v100.x.x` series and must not already exist. |
 
 The workflow creates the tag at that revision for you and publishes from it. A version with a
 prerelease suffix is marked as a prerelease on GitHub (`prerelease: auto` in `.goreleaser.yml`).
@@ -99,14 +101,14 @@ constraint:
 ```hcl
 jumpcloud = {
   source  = "newriverstrat/jumpcloud"
-  version = "1.1.0-rc.1"
+  version = "100.1.0-rc.1"
 }
 ```
 
 Two things to know:
 
 - **Versions are immutable once the registry has ingested them.** You cannot re-publish
-  `v1.1.0-rc.1` with different code — bump to `-rc.2`. The workflow refuses to reuse an existing
+  `v100.1.0-rc.1` with different code — bump to `-rc.2`. The workflow refuses to reuse an existing
   tag for this reason.
 - **The tag is real and stays behind.** Prerelease tags accumulate in the repo; delete them (tag
   and GitHub release) once the final version ships, if you want the history tidy.
@@ -124,7 +126,7 @@ terraform {
   required_providers {
     jumpcloud = {
       source  = "newriverstrat/jumpcloud"
-      version = "1.0.0"
+      version = "100.0.0"
     }
   }
 }

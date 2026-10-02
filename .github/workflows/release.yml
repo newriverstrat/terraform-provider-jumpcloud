@@ -16,7 +16,7 @@ on:
         required: true
         default: 'nrs-master'
       version:
-        description: 'Version to publish, with v prefix. Use a prerelease suffix for test builds, e.g. v1.1.0-rc.1'
+        description: 'Version to publish, with v prefix. Must be in the v100.x.x series. Use a prerelease suffix for test builds, e.g. v100.1.0-rc.1'
         required: true
 
 permissions:
@@ -35,9 +35,28 @@ jobs:
           ref: ${{ github.event.inputs.revision || github.ref }}
           fetch-depth: 0
 
+      # Runs on both paths. Our releases live in the v100.x.x series specifically
+      # so they can never be confused with, or collide with, upstream's
+      # numbering. Enforcing it here also closes a real footgun: upstream's tags
+      # are reachable from our history, so `git push origin --tags` would
+      # otherwise publish their code under our namespace.
+      - name: Validate release version
+        env:
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if ! printf '%s' "$VERSION" | grep -Eq '^v100\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::'$VERSION' is not a version this fork publishes."
+            echo "::error::Releases must be in the v100.x.x series, e.g. v100.0.0 or v100.1.0-rc.1."
+            echo "::error::If this was an upstream tag, do not publish it under our namespace."
+            exit 1
+          fi
+
+          echo "Releasing $VERSION"
+
       # GoReleaser takes the version from the tag at HEAD, so a manual run has
-      # to create one. Guarded so a malformed or already-used version fails
-      # here rather than halfway through publishing.
+      # to create one.
       - name: Create tag for manual release
         if: github.event_name == 'workflow_dispatch'
         env:
@@ -45,11 +64,6 @@ jobs:
           REVISION: ${{ github.event.inputs.revision }}
         run: |
           set -euo pipefail
-
-          if ! printf '%s' "$VERSION" | grep -Eq '^v[0-9]+\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
-            echo "::error::'$VERSION' is not valid semver. Expected e.g. v1.1.0 or v1.1.0-rc.1"
-            exit 1
-          fi
 
           if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
             echo "::error::Tag $VERSION already exists. Versions are immutable once published to the registry - pick a new one."
