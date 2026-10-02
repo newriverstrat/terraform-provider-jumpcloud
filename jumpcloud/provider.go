@@ -31,6 +31,8 @@ func Provider() *schema.Provider {
 			"jumpcloud_user_group_membership":  resourceUserGroupMembership(),
 			"jumpcloud_system_group":           resourceGroupsSystem(),
 			"jumpcloud_user_group_association": resourceUserGroupAssociation(),
+			"jumpcloud_organization_settings":  resourceOrganizationSettings(),
+			"jumpcloud_authentication_policy":  resourceAuthenticationPolicy(),
 		},
 		DataSourcesMap: map[string]*schema.Resource{
 			"jumpcloud_user":        dataSourceJumpCloudUser(),
