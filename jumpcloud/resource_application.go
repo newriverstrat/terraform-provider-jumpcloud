@@ -41,6 +41,15 @@ func resourceApplication() *schema.Resource {
 				Default:     false,
 				Optional:    true,
 			},
+			"active": {
+				Description: "Whether single sign-on is active for this application. JumpCloud " +
+					"shows an inactive application as \"Single Sign-On Inactive\" in the console; " +
+					"this resource never set the field before, so it was left at JumpCloud's own " +
+					"default (inactive) regardless of Terraform config.",
+				Type:     schema.TypeBool,
+				Optional: true,
+				Default:  true,
+			},
 			"display_label": {
 				Description: "Name of the application to display",
 				Type:        schema.TypeString,
@@ -229,6 +238,11 @@ func resourceApplicationRead(d *schema.ResourceData, meta interface{}) error {
 			return err
 		}
 	}
+	if v, ok := raw["active"].(bool); ok {
+		if err := d.Set("active", v); err != nil {
+			return err
+		}
+	}
 	if v, ok := raw["displayLabel"].(string); ok {
 		if err := d.Set("display_label", v); err != nil {
 			return err
@@ -378,6 +392,7 @@ func buildApplicationRequestBody(seed map[string]interface{}, d *schema.Resource
 	body["displayLabel"] = d.Get("display_label").(string)
 	body["ssoUrl"] = d.Get("sso_url").(string)
 	body["beta"] = d.Get("beta").(bool)
+	body["active"] = d.Get("active").(bool)
 
 	cfg, ok := body["config"].(map[string]interface{})
 	if !ok {
