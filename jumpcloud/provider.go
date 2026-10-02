@@ -35,6 +35,7 @@ func Provider() *schema.Provider {
 			"jumpcloud_authentication_policy":  resourceAuthenticationPolicy(),
 			"jumpcloud_mfa_factor":             resourceMfaFactor(),
 			"jumpcloud_webauthn_settings":      resourceWebauthnSettings(),
+			"jumpcloud_mfa_enrollment_policy":  resourceMfaEnrollmentPolicy(),
 		},
 		DataSourcesMap: map[string]*schema.Resource{
 			"jumpcloud_user":        dataSourceJumpCloudUser(),
