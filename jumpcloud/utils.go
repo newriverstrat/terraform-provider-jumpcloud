@@ -210,6 +210,9 @@ func jcWriteRaw(method, basePath, apiKey, path string, body map[string]interface
 	if err != nil {
 		return nil, err
 	}
+	if resp.StatusCode() == http.StatusNotFound {
+		return nil, ErrNotFound
+	}
 	if resp.IsError() {
 		return nil, fmt.Errorf("error %s %s: %s; body: %s",
 			method, path, resp.Status(), strings.TrimSpace(string(resp.Body())))
