@@ -373,6 +373,14 @@ func buildAuthPolicyRequestBody(seed map[string]interface{}, d *schema.ResourceD
 			"inclusions": stringSliceFromInterfaceList(d.Get("target_user_inclusions").([]interface{})),
 		},
 		"excludedApplications": stringSliceFromInterfaceList(d.Get("target_excluded_applications").([]interface{})),
+		// userGroups isn't exposed as a managed field yet (nothing has asked
+		// for group-scoped policies) -- confirmed present on the real object
+		// via a captured PATCH, so it's included empty here rather than
+		// omitted, matching the real schema as closely as possible.
+		"userGroups": map[string]interface{}{
+			"inclusions": []string{},
+			"exclusions": []string{},
+		},
 	}
 
 	return body, nil

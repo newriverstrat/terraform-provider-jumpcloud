@@ -200,6 +200,8 @@ func jcWriteRaw(method, basePath, apiKey, path string, body map[string]interface
 		resp, err = req.Post(basePath + path)
 	case http.MethodPut:
 		resp, err = req.Put(basePath + path)
+	case http.MethodPatch:
+		resp, err = req.Patch(basePath + path)
 	case http.MethodDelete:
 		resp, err = req.Delete(basePath + path)
 	default:
@@ -263,7 +265,11 @@ func AuthPolicyCreateRaw(basePath, apiKey string, body map[string]interface{}) (
 
 // AuthPolicyUpdateRaw updates an authentication policy (v2) from a raw request body.
 func AuthPolicyUpdateRaw(basePath, apiKey, id string, body map[string]interface{}) (map[string]interface{}, error) {
-	result, err := jcWriteRaw(http.MethodPut, basePath, apiKey, "/authn/policies/"+id, body)
+	// Confirmed live via a captured browser request: this endpoint uses PATCH,
+	// not PUT (PUT 404s). jc-cli's generic V2Client.Update always uses PUT,
+	// which is wrong for this specific endpoint -- another case of jc-cli's
+	// own assumptions not holding for this unverified area.
+	result, err := jcWriteRaw(http.MethodPatch, basePath, apiKey, "/authn/policies/"+id, body)
 	if err != nil {
 		return nil, err
 	}
