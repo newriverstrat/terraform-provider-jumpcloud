@@ -81,12 +81,21 @@ func Provider() *schema.Provider {
 			//     narrower one layering a stricter factor requirement onto one
 			//     sensitive application.
 			//       jumpcloud_authentication_policy
+			//
+			//  4. Default access policies -- one fallback policy per resource
+			//     type (application, userportal, adminportal, ldap), distinct
+			//     from the named/targeted policies in layer 3. Each is a true
+			//     singleton identified entirely by its URL, with a simpler
+			//     effect object (no factor-type restriction was observed in a
+			//     captured write).
+			//       jumpcloud_default_access_policy
 			"jumpcloud_mfa_enrollment_policy": resourceMfaEnrollmentPolicy(),
 			"jumpcloud_mfa_factor":            resourceMfaFactor(),
 			"jumpcloud_webauthn_settings":     resourceWebauthnSettings(),
 			"jumpcloud_push_settings":         resourcePushSettings(),
 			"jumpcloud_durt_settings":         resourceDurtSettings(),
 			"jumpcloud_authentication_policy": resourceAuthenticationPolicy(),
+			"jumpcloud_default_access_policy": resourceDefaultAccessPolicy(),
 		},
 		DataSourcesMap: map[string]*schema.Resource{
 			"jumpcloud_user":        dataSourceJumpCloudUser(),
