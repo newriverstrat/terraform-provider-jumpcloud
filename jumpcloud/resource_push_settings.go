@@ -88,8 +88,8 @@ func resolvePushConfigId(config *jcapiv2.Configuration, d *schema.ResourceData) 
 		return v.(string), nil
 	}
 
-	apiKey := config.DefaultHeader["x-api-key"]
-	configs, err := jcListArrayRaw(config.BasePath, apiKey, "/push/configs")
+	headers := config.DefaultHeader
+	configs, err := jcListArrayRaw(config.BasePath, headers, "/push/configs")
 	if err != nil {
 		return "", err
 	}
@@ -108,34 +108,33 @@ func resolvePushConfigId(config *jcapiv2.Configuration, d *schema.ResourceData) 
 
 func resourcePushSettingsCreateUpdate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*jcapiv2.Configuration)
-	apiKey := config.DefaultHeader["x-api-key"]
+	headers := config.DefaultHeader
 
 	configId, err := resolvePushConfigId(config, d)
 	if err != nil {
 		return err
 	}
 
-	// readOnly is server-controlled, never user-set -- preserve whatever the
-	// API last reported rather than guessing a value for it.
-	readOnly := false
-	if current, err := jcGetRaw(config.BasePath, apiKey, "/push/configs/"+configId); err == nil {
-		if v, ok := current["readOnly"].(bool); ok {
-			readOnly = v
-		}
+	// The PUT needs the full object back, including server-controlled fields
+	// like readOnly, so overlay the managed fields onto the current object. If
+	// the GET fails, abort instead of writing guessed values for those fields.
+	body, err := jcGetRaw(config.BasePath, headers, "/push/configs/"+configId)
+	if err != nil {
+		return err
 	}
+	body["id"] = configId
+	body["userVerification"] = d.Get("user_verification").(string)
+	body["isTotpIntegrated"] = d.Get("is_totp_integrated").(bool)
+	body["exclusionGroups"] = stringSliceFromInterfaceList(d.Get("exclusion_groups").([]interface{}))
+	limit, ok := body["concurrentLimit"].(map[string]interface{})
+	if !ok {
+		limit = map[string]interface{}{}
+		body["concurrentLimit"] = limit
+	}
+	limit["enabled"] = d.Get("concurrent_limit_enabled").(bool)
+	limit["max"] = d.Get("concurrent_limit_max").(int)
 
-	body := map[string]interface{}{
-		"id":               configId,
-		"userVerification": d.Get("user_verification").(string),
-		"isTotpIntegrated": d.Get("is_totp_integrated").(bool),
-		"exclusionGroups":  stringSliceFromInterfaceList(d.Get("exclusion_groups").([]interface{})),
-		"readOnly":         readOnly,
-		"concurrentLimit": map[string]interface{}{
-			"enabled": d.Get("concurrent_limit_enabled").(bool),
-			"max":     d.Get("concurrent_limit_max").(int),
-		},
-	}
-	if _, err := jcWriteRaw(http.MethodPut, config.BasePath, apiKey, "/push/configs/"+configId, body); err != nil {
+	if _, err := jcWriteRaw(http.MethodPut, config.BasePath, headers, "/push/configs/"+configId, body); err != nil {
 		return err
 	}
 
@@ -145,9 +144,9 @@ func resourcePushSettingsCreateUpdate(d *schema.ResourceData, meta interface{}) 
 
 func resourcePushSettingsRead(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*jcapiv2.Configuration)
-	apiKey := config.DefaultHeader["x-api-key"]
+	headers := config.DefaultHeader
 
-	raw, err := jcGetRaw(config.BasePath, apiKey, "/push/configs/"+d.Id())
+	raw, err := jcGetRaw(config.BasePath, headers, "/push/configs/"+d.Id())
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			d.SetId("")

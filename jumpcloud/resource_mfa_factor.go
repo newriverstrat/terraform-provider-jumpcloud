@@ -2,7 +2,6 @@ package jumpcloud
 
 import (
 	"errors"
-	"log"
 	"net/http"
 
 	jcapiv1 "github.com/TheJumpCloud/jcapi-go/v1"
@@ -68,8 +67,8 @@ func resourceMfaFactor() *schema.Resource {
 }
 
 func mfaFactorWrite(configv1 *jcapiv1.Configuration, factorType string, enabled bool) error {
-	apiKey := configv1.DefaultHeader["x-api-key"]
-	_, err := jcWriteRaw(http.MethodPut, configv1.BasePath, apiKey, "/userportal/mfa/"+factorType, map[string]interface{}{
+	headers := configv1.DefaultHeader
+	_, err := jcWriteRaw(http.MethodPut, configv1.BasePath, headers, "/userportal/mfa/"+factorType, map[string]interface{}{
 		"type":    factorType,
 		"enabled": enabled,
 	})
@@ -91,9 +90,9 @@ func resourceMfaFactorCreateUpdate(d *schema.ResourceData, meta interface{}) err
 
 func resourceMfaFactorRead(d *schema.ResourceData, meta interface{}) error {
 	configv1 := convertV2toV1Config(meta.(*jcapiv2.Configuration))
-	apiKey := configv1.DefaultHeader["x-api-key"]
+	headers := configv1.DefaultHeader
 
-	raw, err := jcGetRaw(configv1.BasePath, apiKey, "/userportal/mfa/"+d.Id())
+	raw, err := jcGetRaw(configv1.BasePath, headers, "/userportal/mfa/"+d.Id())
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			d.SetId("")
@@ -101,11 +100,10 @@ func resourceMfaFactorRead(d *schema.ResourceData, meta interface{}) error {
 		}
 		// GET is confirmed to work for webauthn and totp (a live capture of
 		// the latter returned {"type":"totp","enabled":true,"id":"",
-		// "readOnly":false}), but not every factor_type is verified yet.
-		// Don't fail plan/apply over an unverified one -- leave the
-		// already-recorded state as the source of truth.
-		log.Printf("[WARN] skipping refresh for mfa factor %s: %s", d.Id(), err)
-		return nil
+		// "readOnly":false}). Any other failure -- auth, outage, or a
+		// factor_type the API doesn't support -- fails Read rather than
+		// leaving stale state looking freshly refreshed.
+		return err
 	}
 
 	if err := d.Set("factor_type", d.Id()); err != nil {

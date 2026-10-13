@@ -7,6 +7,8 @@ import (
 
 	jcapiv2 "github.com/TheJumpCloud/jcapi-go/v2"
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/structure"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/validation"
 )
 
 // resourceAuthenticationPolicy manages a JumpCloud authentication policy
@@ -74,9 +76,14 @@ func resourceAuthenticationPolicy() *schema.Resource {
 					"No typed schema is exposed for this -- confirmed via a " +
 					"captured browser request to be an object ({} for no " +
 					"conditions), but its shape beyond that isn't confirmed.",
-				Type:     schema.TypeString,
-				Optional: true,
-				Default:  "{}",
+				Type:         schema.TypeString,
+				Optional:     true,
+				Default:      "{}",
+				ValidateFunc: validation.StringIsJSON,
+				// Read stores the API's compact re-encoding, so compare
+				// semantically rather than textually to avoid perpetual diffs
+				// on formatted input.
+				DiffSuppressFunc: structure.SuppressJsonDiff,
 			},
 			"effect_action": {
 				Description: "The base access decision when this policy applies: " +
@@ -143,14 +150,14 @@ func resourceAuthenticationPolicy() *schema.Resource {
 
 func resourceAuthenticationPolicyCreate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*jcapiv2.Configuration)
-	apiKey := config.DefaultHeader["x-api-key"]
+	headers := config.DefaultHeader
 
 	body, err := buildAuthPolicyRequestBody(nil, d)
 	if err != nil {
 		return err
 	}
 
-	result, err := AuthPolicyCreateRaw(config.BasePath, apiKey, body)
+	result, err := AuthPolicyCreateRaw(config.BasePath, headers, body)
 	if err != nil {
 		return err
 	}
@@ -168,9 +175,9 @@ func resourceAuthenticationPolicyCreate(d *schema.ResourceData, meta interface{}
 
 func resourceAuthenticationPolicyRead(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*jcapiv2.Configuration)
-	apiKey := config.DefaultHeader["x-api-key"]
+	headers := config.DefaultHeader
 
-	raw, err := AuthPolicyGetRaw(config.BasePath, apiKey, d.Id())
+	raw, err := AuthPolicyGetRaw(config.BasePath, headers, d.Id())
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			d.SetId("")
@@ -284,9 +291,9 @@ func resourceAuthenticationPolicyRead(d *schema.ResourceData, meta interface{}) 
 
 func resourceAuthenticationPolicyUpdate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*jcapiv2.Configuration)
-	apiKey := config.DefaultHeader["x-api-key"]
+	headers := config.DefaultHeader
 
-	current, err := AuthPolicyGetRaw(config.BasePath, apiKey, d.Id())
+	current, err := AuthPolicyGetRaw(config.BasePath, headers, d.Id())
 	if err != nil {
 		return err
 	}
@@ -294,7 +301,7 @@ func resourceAuthenticationPolicyUpdate(d *schema.ResourceData, meta interface{}
 	if err != nil {
 		return err
 	}
-	if _, err := AuthPolicyUpdateRaw(config.BasePath, apiKey, d.Id(), body); err != nil {
+	if _, err := AuthPolicyUpdateRaw(config.BasePath, headers, d.Id(), body); err != nil {
 		return err
 	}
 	return resourceAuthenticationPolicyRead(d, meta)
@@ -302,9 +309,9 @@ func resourceAuthenticationPolicyUpdate(d *schema.ResourceData, meta interface{}
 
 func resourceAuthenticationPolicyDelete(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*jcapiv2.Configuration)
-	apiKey := config.DefaultHeader["x-api-key"]
+	headers := config.DefaultHeader
 
-	if err := AuthPolicyDeleteRaw(config.BasePath, apiKey, d.Id()); err != nil {
+	if err := AuthPolicyDeleteRaw(config.BasePath, headers, d.Id()); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			d.SetId("")
 			return nil
