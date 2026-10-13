@@ -12,6 +12,39 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var testHeaders = map[string]string{"x-api-key": "test-key"}
+
+// Raw helpers must carry the provider's configured x-org-id, not just the API
+// key, or multi-tenant setups would hit the key's default organization.
+func TestJcRawHelpersSendOrgHeader(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		assert.Equal(t, "test-key", r.Header.Get("x-api-key"))
+		assert.Equal(t, "org-123", r.Header.Get("x-org-id"))
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "abc"})
+	}))
+	defer server.Close()
+
+	headers := map[string]string{"x-api-key": "test-key", "x-org-id": "org-123"}
+	_, err := jcGetRaw(server.URL, headers, "/widgets/abc")
+	require.NoError(t, err)
+	_, err = jcWriteRaw(http.MethodPut, server.URL, headers, "/widgets/abc", map[string]interface{}{"enabled": true})
+	require.NoError(t, err)
+}
+
+func TestJcRawHelpersOmitUnsetOrgHeader(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, present := r.Header["X-Org-Id"]
+		assert.False(t, present)
+		w.Header().Set("Content-Type", "application/json")
+		_ = json.NewEncoder(w).Encode(map[string]interface{}{"id": "abc"})
+	}))
+	defer server.Close()
+
+	_, err := jcGetRaw(server.URL, map[string]string{"x-api-key": "test-key", "x-org-id": ""}, "/widgets/abc")
+	require.NoError(t, err)
+}
+
 func TestJcGetRaw(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		assert.Equal(t, "/widgets/abc", r.URL.Path)
@@ -21,7 +54,7 @@ func TestJcGetRaw(t *testing.T) {
 	}))
 	defer server.Close()
 
-	result, err := jcGetRaw(server.URL, "test-key", "/widgets/abc")
+	result, err := jcGetRaw(server.URL, testHeaders, "/widgets/abc")
 	require.NoError(t, err)
 	assert.Equal(t, "abc", result["id"])
 	assert.Equal(t, true, result["enabled"])
@@ -33,7 +66,7 @@ func TestJcGetRawNotFound(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := jcGetRaw(server.URL, "test-key", "/widgets/missing")
+	_, err := jcGetRaw(server.URL, testHeaders, "/widgets/missing")
 	require.Error(t, err)
 	assert.True(t, errors.Is(err, ErrNotFound))
 }
@@ -45,7 +78,7 @@ func TestJcGetRawServerError(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := jcGetRaw(server.URL, "test-key", "/widgets/abc")
+	_, err := jcGetRaw(server.URL, testHeaders, "/widgets/abc")
 	require.Error(t, err)
 	assert.False(t, errors.Is(err, ErrNotFound))
 	assert.Contains(t, err.Error(), "boom")
@@ -62,7 +95,7 @@ func TestJcListRawWrapsResults(t *testing.T) {
 	}))
 	defer server.Close()
 
-	results, err := jcListRaw(server.URL, "test-key", "/organizations")
+	results, err := jcListRaw(server.URL, testHeaders, "/organizations")
 	require.NoError(t, err)
 	require.Len(t, results, 2)
 	assert.Equal(t, "org1", results[0]["_id"])
@@ -81,7 +114,7 @@ func TestJcListArrayRawDecodesBareArray(t *testing.T) {
 	}))
 	defer server.Close()
 
-	results, err := jcListArrayRaw(server.URL, "test-key", "/webauthn/configs")
+	results, err := jcListArrayRaw(server.URL, testHeaders, "/webauthn/configs")
 	require.NoError(t, err)
 	require.Len(t, results, 1)
 	assert.Equal(t, "cfg1", results[0]["_id"])
@@ -94,7 +127,7 @@ func TestJcListArrayRawRejectsWrappedShape(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := jcListArrayRaw(server.URL, "test-key", "/webauthn/configs")
+	_, err := jcListArrayRaw(server.URL, testHeaders, "/webauthn/configs")
 	require.Error(t, err, "a {\"results\":[...]} body is not a bare array and must fail to decode")
 }
 
@@ -114,7 +147,7 @@ func TestJcWriteRawMethods(t *testing.T) {
 			}))
 			defer server.Close()
 
-			result, err := jcWriteRaw(method, server.URL, "test-key", "/thing/1", map[string]interface{}{"enabled": true})
+			result, err := jcWriteRaw(method, server.URL, testHeaders, "/thing/1", map[string]interface{}{"enabled": true})
 			require.NoError(t, err)
 			assert.Equal(t, method, gotMethod)
 			assert.Equal(t, true, gotBody["enabled"])
@@ -131,13 +164,13 @@ func TestJcWriteRawEmptyBodyIsSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 
-	result, err := jcWriteRaw(http.MethodPut, server.URL, "test-key", "/thing/1", map[string]interface{}{"enabled": true})
+	result, err := jcWriteRaw(http.MethodPut, server.URL, testHeaders, "/thing/1", map[string]interface{}{"enabled": true})
 	require.NoError(t, err)
 	assert.Nil(t, result)
 }
 
 func TestJcWriteRawUnsupportedMethod(t *testing.T) {
-	_, err := jcWriteRaw(http.MethodGet, "http://example.invalid", "test-key", "/thing/1", nil)
+	_, err := jcWriteRaw(http.MethodGet, "http://example.invalid", testHeaders, "/thing/1", nil)
 	require.Error(t, err)
 	assert.Contains(t, err.Error(), "unsupported method")
 }
@@ -157,7 +190,7 @@ func TestAuthPolicyUpdateRawUsesPatch(t *testing.T) {
 	}))
 	defer server.Close()
 
-	_, err := AuthPolicyUpdateRaw(server.URL, "test-key", "policy1", map[string]interface{}{"name": "test"})
+	_, err := AuthPolicyUpdateRaw(server.URL, testHeaders, "policy1", map[string]interface{}{"name": "test"})
 	require.NoError(t, err)
 	assert.Equal(t, http.MethodPatch, gotMethod)
 	assert.Equal(t, "/authn/policies/policy1", gotPath)
@@ -169,7 +202,7 @@ func TestAuthPolicyUpdateRawEmptyBodyIsSuccess(t *testing.T) {
 	}))
 	defer server.Close()
 
-	result, err := AuthPolicyUpdateRaw(server.URL, "test-key", "policy1", map[string]interface{}{"name": "test"})
+	result, err := AuthPolicyUpdateRaw(server.URL, testHeaders, "policy1", map[string]interface{}{"name": "test"})
 	require.NoError(t, err)
 	assert.Equal(t, map[string]interface{}{}, result)
 }
