@@ -33,7 +33,8 @@ func resourceDurtSettings() *schema.Resource {
 		Schema: map[string]*schema.Schema{
 			"enabled": {
 				Description: "Whether JumpCloud Go (DURT) is enabled org-wide. " +
-					"Destroying this resource resets it to false.",
+					"Destroying this resource resets it to false (unless JumpCloud " +
+					"reports the setting as read-only, in which case it is left as is).",
 				Type:     schema.TypeBool,
 				Optional: true,
 				Default:  false,
@@ -42,29 +43,36 @@ func resourceDurtSettings() *schema.Resource {
 	}
 }
 
-func durtSettingsWrite(config *jcapiv2.Configuration, enabled bool) error {
-	apiKey := config.DefaultHeader["x-api-key"]
+// durtSettingsWrite PUTs enabled while preserving the server-controlled
+// readOnly flag. With skipIfReadOnly (destroy), a readOnly config is left
+// untouched instead of written, since that write can only be rejected and
+// would otherwise block destroy.
+func durtSettingsWrite(config *jcapiv2.Configuration, enabled, skipIfReadOnly bool) error {
+	headers := config.DefaultHeader
 
 	// readOnly is server-controlled, never user-set -- preserve whatever the
-	// API last reported rather than guessing a value for it.
-	readOnly := false
-	if current, err := jcGetRaw(config.BasePath, apiKey, "/durt/settings"); err == nil {
-		if v, ok := current["readOnly"].(bool); ok {
-			readOnly = v
-		}
+	// API reports rather than guessing a value for it. If the GET fails, abort
+	// instead of writing a guessed readOnly back.
+	current, err := jcGetRaw(config.BasePath, headers, "/durt/settings")
+	if err != nil {
+		return err
+	}
+	readOnly, _ := current["readOnly"].(bool)
+	if readOnly && skipIfReadOnly {
+		return nil
 	}
 
 	body := map[string]interface{}{
 		"enabled":  enabled,
 		"readOnly": readOnly,
 	}
-	_, err := jcWriteRaw(http.MethodPut, config.BasePath, apiKey, "/durt/settings", body)
+	_, err = jcWriteRaw(http.MethodPut, config.BasePath, headers, "/durt/settings", body)
 	return err
 }
 
 func resourceDurtSettingsCreateUpdate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*jcapiv2.Configuration)
-	if err := durtSettingsWrite(config, d.Get("enabled").(bool)); err != nil {
+	if err := durtSettingsWrite(config, d.Get("enabled").(bool), false); err != nil {
 		return err
 	}
 	d.SetId(durtSettingsID)
@@ -73,25 +81,22 @@ func resourceDurtSettingsCreateUpdate(d *schema.ResourceData, meta interface{}) 
 
 func resourceDurtSettingsRead(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*jcapiv2.Configuration)
-	apiKey := config.DefaultHeader["x-api-key"]
+	headers := config.DefaultHeader
 
-	raw, err := jcGetRaw(config.BasePath, apiKey, "/durt/settings")
+	raw, err := jcGetRaw(config.BasePath, headers, "/durt/settings")
 	if err != nil {
 		return err
 	}
 
 	d.SetId(durtSettingsID)
-	if v, ok := raw["enabled"].(bool); ok {
-		if err := d.Set("enabled", v); err != nil {
-			return err
-		}
-	}
-	return nil
+	// Set unconditionally, defaulting when the response omits the field, so a
+	// missing field can't leave a stale value in state.
+	return d.Set("enabled", boolOr(raw["enabled"], false))
 }
 
 func resourceDurtSettingsDelete(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*jcapiv2.Configuration)
-	if err := durtSettingsWrite(config, false); err != nil {
+	if err := durtSettingsWrite(config, false, true); err != nil {
 		return err
 	}
 	d.SetId("")
