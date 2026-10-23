@@ -7,6 +7,8 @@ import (
 
 	jcapiv2 "github.com/TheJumpCloud/jcapi-go/v2"
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/structure"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/validation"
 )
 
 // resourceAuthenticationPolicy manages a JumpCloud authentication policy
@@ -74,9 +76,14 @@ func resourceAuthenticationPolicy() *schema.Resource {
 					"No typed schema is exposed for this -- confirmed via a " +
 					"captured browser request to be an object ({} for no " +
 					"conditions), but its shape beyond that isn't confirmed.",
-				Type:     schema.TypeString,
-				Optional: true,
-				Default:  "{}",
+				Type:         schema.TypeString,
+				Optional:     true,
+				Default:      "{}",
+				ValidateFunc: validation.StringIsJSON,
+				// Read stores the API's compact re-encoding, so compare
+				// semantically rather than textually to avoid perpetual diffs
+				// on formatted input.
+				DiffSuppressFunc: structure.SuppressJsonDiff,
 			},
 			"effect_action": {
 				Description: "The base access decision when this policy applies: " +
@@ -143,14 +150,14 @@ func resourceAuthenticationPolicy() *schema.Resource {
 
 func resourceAuthenticationPolicyCreate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*jcapiv2.Configuration)
-	apiKey := config.DefaultHeader["x-api-key"]
+	headers := config.DefaultHeader
 
 	body, err := buildAuthPolicyRequestBody(nil, d)
 	if err != nil {
 		return err
 	}
 
-	result, err := AuthPolicyCreateRaw(config.BasePath, apiKey, body)
+	result, err := AuthPolicyCreateRaw(config.BasePath, headers, body)
 	if err != nil {
 		return err
 	}
@@ -168,9 +175,9 @@ func resourceAuthenticationPolicyCreate(d *schema.ResourceData, meta interface{}
 
 func resourceAuthenticationPolicyRead(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*jcapiv2.Configuration)
-	apiKey := config.DefaultHeader["x-api-key"]
+	headers := config.DefaultHeader
 
-	raw, err := AuthPolicyGetRaw(config.BasePath, apiKey, d.Id())
+	raw, err := AuthPolicyGetRaw(config.BasePath, headers, d.Id())
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			d.SetId("")
@@ -179,102 +186,43 @@ func resourceAuthenticationPolicyRead(d *schema.ResourceData, meta interface{}) 
 		return err
 	}
 
-	if v, ok := raw["name"].(string); ok {
-		if err := d.Set("name", v); err != nil {
-			return err
-		}
-	}
-	if v, ok := raw["description"].(string); ok {
-		if err := d.Set("description", v); err != nil {
-			return err
-		}
-	}
-	if v, ok := raw["type"].(string); ok {
-		if err := d.Set("type", v); err != nil {
-			return err
-		}
-	}
-	if v, ok := raw["disabled"].(bool); ok {
-		if err := d.Set("disabled", v); err != nil {
-			return err
-		}
-	}
-	if v, ok := raw["monitorOnly"].(bool); ok {
-		if err := d.Set("monitor_only", v); err != nil {
-			return err
-		}
-	}
-	if cond, ok := raw["conditions"]; ok && cond != nil {
+	// Every field is set unconditionally, using its effective default when the
+	// response omits it (or sends null). Skipping absent fields would leave the
+	// previous value in state and make a remote change invisible to Terraform.
+	effect, _ := raw["effect"].(map[string]interface{})
+	obligations, _ := effect["obligations"].(map[string]interface{})
+	mfa, _ := obligations["mfa"].(map[string]interface{})
+	userVerification, _ := obligations["userVerification"].(map[string]interface{})
+	targets, _ := raw["targets"].(map[string]interface{})
+	users, _ := targets["users"].(map[string]interface{})
+
+	conditionsJSON := "{}"
+	if cond := raw["conditions"]; cond != nil {
 		b, err := json.Marshal(cond)
 		if err != nil {
 			return fmt.Errorf("re-encoding conditions for state: %w", err)
 		}
-		if err := d.Set("conditions_json", string(b)); err != nil {
-			return err
-		}
+		conditionsJSON = string(b)
 	}
 
-	if effect, ok := raw["effect"].(map[string]interface{}); ok {
-		if v, ok := effect["action"].(string); ok {
-			if err := d.Set("effect_action", v); err != nil {
-				return err
-			}
-		}
-		if obligations, ok := effect["obligations"].(map[string]interface{}); ok {
-			if mfa, ok := obligations["mfa"].(map[string]interface{}); ok {
-				required, _ := mfa["required"].(bool)
-				if err := d.Set("mfa_required", required); err != nil {
-					return err
-				}
-			}
-			if uv, ok := obligations["userVerification"].(map[string]interface{}); ok {
-				if v, ok := uv["requirement"].(string); ok {
-					if err := d.Set("user_verification_requirement", v); err != nil {
-						return err
-					}
-				}
-			}
-			if v, ok := obligations["mfaFactorSelectionMode"].(string); ok {
-				if err := d.Set("mfa_factor_selection_mode", v); err != nil {
-					return err
-				}
-			}
-			if factors, ok := obligations["mfaFactors"].([]interface{}); ok {
-				types := make([]string, 0, len(factors))
-				for _, f := range factors {
-					if fm, ok := f.(map[string]interface{}); ok {
-						if t, ok := fm["type"].(string); ok {
-							types = append(types, t)
-						}
-					}
-				}
-				if err := d.Set("mfa_factors", types); err != nil {
-					return err
-				}
-			}
-		}
+	values := map[string]interface{}{
+		"name":                          stringOr(raw["name"], ""),
+		"description":                   stringOr(raw["description"], ""),
+		"type":                          stringOr(raw["type"], ""),
+		"disabled":                      boolOr(raw["disabled"], false),
+		"monitor_only":                  boolOr(raw["monitorOnly"], false),
+		"conditions_json":               conditionsJSON,
+		"effect_action":                 stringOr(effect["action"], ""),
+		"mfa_required":                  boolOr(mfa["required"], false),
+		"mfa_factors":                   typesFromObjects(obligations["mfaFactors"]),
+		"mfa_factor_selection_mode":     stringOr(obligations["mfaFactorSelectionMode"], "all"),
+		"user_verification_requirement": stringOr(userVerification["requirement"], "none"),
+		"target_resource_types":         typesFromObjects(targets["resources"]),
+		"target_user_inclusions":        stringSliceFromAny(users["inclusions"]),
+		"target_excluded_applications":  stringSliceFromAny(targets["excludedApplications"]),
 	}
-
-	if targets, ok := raw["targets"].(map[string]interface{}); ok {
-		if resources, ok := targets["resources"].([]interface{}); ok {
-			types := make([]string, 0, len(resources))
-			for _, r := range resources {
-				if rm, ok := r.(map[string]interface{}); ok {
-					if t, ok := rm["type"].(string); ok {
-						types = append(types, t)
-					}
-				}
-			}
-			if err := d.Set("target_resource_types", types); err != nil {
-				return err
-			}
-		}
-		if users, ok := targets["users"].(map[string]interface{}); ok {
-			if err := d.Set("target_user_inclusions", stringSliceFromAny(users["inclusions"])); err != nil {
-				return err
-			}
-		}
-		if err := d.Set("target_excluded_applications", stringSliceFromAny(targets["excludedApplications"])); err != nil {
+	for k, v := range values {
+		if err := d.Set(k, v); err != nil {
 			return err
 		}
 	}
@@ -282,11 +230,27 @@ func resourceAuthenticationPolicyRead(d *schema.ResourceData, meta interface{}) 
 	return nil
 }
 
+// typesFromObjects extracts the "type" of each object in a raw JSON array of
+// objects (mfaFactors, targets.resources). A missing or non-array value yields
+// an empty slice.
+func typesFromObjects(raw interface{}) []string {
+	arr, _ := raw.([]interface{})
+	out := make([]string, 0, len(arr))
+	for _, item := range arr {
+		if m, ok := item.(map[string]interface{}); ok {
+			if t, ok := m["type"].(string); ok {
+				out = append(out, t)
+			}
+		}
+	}
+	return out
+}
+
 func resourceAuthenticationPolicyUpdate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*jcapiv2.Configuration)
-	apiKey := config.DefaultHeader["x-api-key"]
+	headers := config.DefaultHeader
 
-	current, err := AuthPolicyGetRaw(config.BasePath, apiKey, d.Id())
+	current, err := AuthPolicyGetRaw(config.BasePath, headers, d.Id())
 	if err != nil {
 		return err
 	}
@@ -294,7 +258,7 @@ func resourceAuthenticationPolicyUpdate(d *schema.ResourceData, meta interface{}
 	if err != nil {
 		return err
 	}
-	if _, err := AuthPolicyUpdateRaw(config.BasePath, apiKey, d.Id(), body); err != nil {
+	if _, err := AuthPolicyUpdateRaw(config.BasePath, headers, d.Id(), body); err != nil {
 		return err
 	}
 	return resourceAuthenticationPolicyRead(d, meta)
@@ -302,9 +266,9 @@ func resourceAuthenticationPolicyUpdate(d *schema.ResourceData, meta interface{}
 
 func resourceAuthenticationPolicyDelete(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*jcapiv2.Configuration)
-	apiKey := config.DefaultHeader["x-api-key"]
+	headers := config.DefaultHeader
 
-	if err := AuthPolicyDeleteRaw(config.BasePath, apiKey, d.Id()); err != nil {
+	if err := AuthPolicyDeleteRaw(config.BasePath, headers, d.Id()); err != nil {
 		if errors.Is(err, ErrNotFound) {
 			d.SetId("")
 			return nil
@@ -344,46 +308,77 @@ func buildAuthPolicyRequestBody(seed map[string]interface{}, d *schema.ResourceD
 	}
 	body["conditions"] = cond
 
-	mfaFactors := make([]map[string]interface{}, 0)
-	for _, f := range d.Get("mfa_factors").([]interface{}) {
-		mfaFactors = append(mfaFactors, map[string]interface{}{"type": f.(string)})
-	}
-	body["effect"] = map[string]interface{}{
-		"action": d.Get("effect_action").(string),
-		"obligations": map[string]interface{}{
-			"mfa": map[string]interface{}{
-				"required": d.Get("mfa_required").(bool),
-			},
-			"userVerification": map[string]interface{}{
-				"requirement": d.Get("user_verification_requirement").(string),
-			},
-			"mfaFactors":             mfaFactors,
-			"mfaFactorSelectionMode": d.Get("mfa_factor_selection_mode").(string),
-		},
-	}
+	// Merge the managed fields into whatever the policy already has, rather
+	// than rebuilding these objects, so fields this resource doesn't expose
+	// (userGroups selectors, users.exclusions, ...) survive an update.
+	effect := subMap(body, "effect")
+	effect["action"] = d.Get("effect_action").(string)
+	obligations := subMap(effect, "obligations")
+	subMap(obligations, "mfa")["required"] = d.Get("mfa_required").(bool)
+	subMap(obligations, "userVerification")["requirement"] = d.Get("user_verification_requirement").(string)
+	// Like targets.resources below: keep any other fields on an existing
+	// factor object rather than rebuilding each one as a bare {"type": ...}.
+	obligations["mfaFactors"] = mergeResourceSelectors(obligations["mfaFactors"], d.Get("mfa_factors").([]interface{}))
+	obligations["mfaFactorSelectionMode"] = d.Get("mfa_factor_selection_mode").(string)
 
-	resourceTypes := d.Get("target_resource_types").([]interface{})
-	resources := make([]map[string]interface{}, 0, len(resourceTypes))
-	for _, t := range resourceTypes {
-		resources = append(resources, map[string]interface{}{"type": t.(string)})
+	targets := subMap(body, "targets")
+	targets["resources"] = mergeResourceSelectors(targets["resources"], d.Get("target_resource_types").([]interface{}))
+	subMap(targets, "users")["inclusions"] = stringSliceFromInterfaceList(d.Get("target_user_inclusions").([]interface{}))
+	targets["excludedApplications"] = stringSliceFromInterfaceList(d.Get("target_excluded_applications").([]interface{}))
+	// userGroups isn't a managed field. Preserve whatever the policy has; only
+	// when it's absent, send it empty, matching the real schema as closely as
+	// possible (confirmed present on the real object via a captured PATCH).
+	userGroups := subMap(targets, "userGroups")
+	if _, ok := userGroups["inclusions"]; !ok {
+		userGroups["inclusions"] = []string{}
 	}
-	body["targets"] = map[string]interface{}{
-		"resources": resources,
-		"users": map[string]interface{}{
-			"inclusions": stringSliceFromInterfaceList(d.Get("target_user_inclusions").([]interface{})),
-		},
-		"excludedApplications": stringSliceFromInterfaceList(d.Get("target_excluded_applications").([]interface{})),
-		// userGroups isn't exposed as a managed field yet (nothing has asked
-		// for group-scoped policies) -- confirmed present on the real object
-		// via a captured PATCH, so it's included empty here rather than
-		// omitted, matching the real schema as closely as possible.
-		"userGroups": map[string]interface{}{
-			"inclusions": []string{},
-			"exclusions": []string{},
-		},
+	if _, ok := userGroups["exclusions"]; !ok {
+		userGroups["exclusions"] = []string{}
 	}
 
 	return body, nil
+}
+
+// mergeResourceSelectors builds a list of {"type": ...} objects (used for
+// targets.resources and effect.obligations.mfaFactors) from the configured
+// types while keeping each existing object's other fields -- notably the id
+// of an application-scoped selector, which this resource can't represent in
+// state. Each configured type reuses the next not-yet-used existing selector of
+// that type; only a type with no existing selector gets a bare {"type": ...}.
+// Without this, a name-only update to an imported application-scoped policy
+// would drop its application ids and widen it to every application.
+func mergeResourceSelectors(existing interface{}, types []interface{}) []interface{} {
+	current, _ := existing.([]interface{})
+	used := make([]bool, len(current))
+	out := make([]interface{}, 0, len(types))
+	for _, t := range types {
+		typ := t.(string)
+		var picked interface{}
+		for i, sel := range current {
+			m, ok := sel.(map[string]interface{})
+			if !used[i] && ok && m["type"] == typ {
+				used[i] = true
+				picked = m
+				break
+			}
+		}
+		if picked == nil {
+			picked = map[string]interface{}{"type": typ}
+		}
+		out = append(out, picked)
+	}
+	return out
+}
+
+// subMap returns m[key] as a map, creating (and storing) an empty one when it
+// is absent or not an object, so callers can set managed fields on it in place.
+func subMap(m map[string]interface{}, key string) map[string]interface{} {
+	if sub, ok := m[key].(map[string]interface{}); ok {
+		return sub
+	}
+	sub := map[string]interface{}{}
+	m[key] = sub
+	return sub
 }
 
 // stringSliceFromInterfaceList converts a Terraform TypeList of strings

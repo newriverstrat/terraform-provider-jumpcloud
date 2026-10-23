@@ -71,11 +71,11 @@ func TestResourceMfaFactorRead(t *testing.T) {
 	assert.Equal(t, false, d.Get("read_only"))
 }
 
-// GET is confirmed to work for webauthn and totp, but not every factor_type
-// is verified -- Read must not fail plan/apply over an unverified one, per
-// the resource's own documented behavior; it should log and leave state as
-// the source of truth instead of erroring or clearing the id.
-func TestResourceMfaFactorReadToleratesUnverifiedFactorError(t *testing.T) {
+// A non-404 GET failure (auth error, outage, unsupported factor_type) must
+// fail Read rather than be swallowed, which would leave stale state looking
+// freshly refreshed. The id must not be cleared either -- only a 404 means
+// the object is gone.
+func TestResourceMfaFactorReadFailsOnNonNotFoundError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.WriteHeader(http.StatusInternalServerError)
 		_, _ = w.Write([]byte("unsupported factor"))
@@ -92,8 +92,10 @@ func TestResourceMfaFactorReadToleratesUnverifiedFactorError(t *testing.T) {
 	})
 	d.SetId("sms")
 
-	require.NoError(t, resourceMfaFactorRead(d, config), "a non-404 GET error must not fail Read")
-	assert.Equal(t, "sms", d.Id(), "id must be left in place, not cleared, on an unverified-factor error")
+	err := resourceMfaFactorRead(d, config)
+	require.Error(t, err, "a non-404 GET error must fail Read")
+	assert.Contains(t, err.Error(), "unsupported factor")
+	assert.Equal(t, "sms", d.Id(), "id must be left in place, not cleared, on a non-404 error")
 }
 
 func TestResourceMfaFactorReadNotFoundClearsId(t *testing.T) {
@@ -137,4 +139,75 @@ func TestResourceMfaFactorDeleteDisables(t *testing.T) {
 	require.NoError(t, resourceMfaFactorDelete(d, config))
 	assert.Equal(t, false, gotBody["enabled"])
 	assert.Equal(t, "", d.Id())
+}
+
+// A read_only factor can't be disabled, so destroy must not attempt the write
+// (which the API would reject, blocking destroy forever).
+func TestResourceMfaFactorDeleteSkipsWriteWhenReadOnly(t *testing.T) {
+	requests := 0
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		requests++
+		w.WriteHeader(http.StatusBadRequest)
+	}))
+	defer server.Close()
+
+	config := jcapiv2.NewConfiguration()
+	config.BasePath = server.URL
+	config.AddDefaultHeader("x-api-key", "test-key")
+
+	d := schema.TestResourceDataRaw(t, resourceMfaFactor().Schema, map[string]interface{}{
+		"factor_type": "totp",
+		"enabled":     true,
+	})
+	require.NoError(t, d.Set("read_only", true))
+	d.SetId("totp")
+
+	require.NoError(t, resourceMfaFactorDelete(d, config))
+	assert.Equal(t, 0, requests, "no write may be sent for a read_only factor")
+	assert.Equal(t, "", d.Id())
+}
+
+func TestResourceMfaFactorDeleteNotFoundIsNotAnError(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNotFound)
+	}))
+	defer server.Close()
+
+	config := jcapiv2.NewConfiguration()
+	config.BasePath = server.URL
+	config.AddDefaultHeader("x-api-key", "test-key")
+
+	d := schema.TestResourceDataRaw(t, resourceMfaFactor().Schema, map[string]interface{}{
+		"factor_type": "sms",
+	})
+	d.SetId("sms")
+
+	require.NoError(t, resourceMfaFactorDelete(d, config))
+	assert.Equal(t, "", d.Id())
+}
+
+func TestResourceMfaFactorDeleteStillFailsOnOtherErrors(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusInternalServerError)
+		_, _ = w.Write([]byte("boom"))
+	}))
+	defer server.Close()
+
+	config := jcapiv2.NewConfiguration()
+	config.BasePath = server.URL
+	config.AddDefaultHeader("x-api-key", "test-key")
+
+	d := schema.TestResourceDataRaw(t, resourceMfaFactor().Schema, map[string]interface{}{
+		"factor_type": "webauthn",
+	})
+	d.SetId("webauthn")
+
+	err := resourceMfaFactorDelete(d, config)
+	require.Error(t, err)
+	assert.Contains(t, err.Error(), "boom")
+	assert.Equal(t, "webauthn", d.Id(), "a failed destroy must keep the resource in state")
+}
+
+func TestResourceMfaFactorDescriptionDisclosesDestroyBehavior(t *testing.T) {
+	assert.Contains(t, resourceMfaFactor().Description, "destroying this resource disables the factor type")
 }

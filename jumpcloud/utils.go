@@ -29,12 +29,8 @@ var ErrApplicationNotFound = errors.New("application not found")
 // includeGroups, groupsAttributeName, and more) that don't exist anywhere in the
 // generated SDK types, so client.ApplicationsApi.ApplicationsGet silently drops
 // them when unmarshaling into the typed struct.
-func ApplicationGetRaw(basePath, apiKey, applicationId string) (map[string]interface{}, error) {
-	client := resty.New().SetDebug(true)
-	resp, err := client.R().
-		SetHeader("x-api-key", apiKey).
-		SetHeader("Accept", "application/json").
-		Get(basePath + "/applications/" + applicationId)
+func ApplicationGetRaw(basePath string, headers map[string]string, applicationId string) (map[string]interface{}, error) {
+	resp, err := jcRawRequest(headers).Get(basePath + "/applications/" + applicationId)
 	if err != nil {
 		return nil, err
 	}
@@ -57,12 +53,9 @@ func ApplicationGetRaw(basePath, apiKey, applicationId string) (map[string]inter
 // applicationWriteRaw POSTs or PUTs a raw application body, for the same reason
 // ApplicationGetRaw bypasses the generated client: the typed Application/
 // ApplicationConfig structs can't represent the fields this resource now manages.
-func applicationWriteRaw(method, basePath, apiKey, path string, body map[string]interface{}) (map[string]interface{}, error) {
-	client := resty.New().SetDebug(true)
-	req := client.R().
-		SetHeader("x-api-key", apiKey).
+func applicationWriteRaw(method, basePath string, headers map[string]string, path string, body map[string]interface{}) (map[string]interface{}, error) {
+	req := jcRawRequest(headers).
 		SetHeader("Content-Type", "application/json").
-		SetHeader("Accept", "application/json").
 		SetBody(body)
 
 	var resp *resty.Response
@@ -91,26 +84,37 @@ func applicationWriteRaw(method, basePath, apiKey, path string, body map[string]
 }
 
 // ApplicationCreateRaw creates an application from a raw request body.
-func ApplicationCreateRaw(basePath, apiKey string, body map[string]interface{}) (map[string]interface{}, error) {
-	return applicationWriteRaw(http.MethodPost, basePath, apiKey, "/applications", body)
+func ApplicationCreateRaw(basePath string, headers map[string]string, body map[string]interface{}) (map[string]interface{}, error) {
+	return applicationWriteRaw(http.MethodPost, basePath, headers, "/applications", body)
 }
 
 // ApplicationUpdateRaw updates an application from a raw request body.
-func ApplicationUpdateRaw(basePath, apiKey, applicationId string, body map[string]interface{}) (map[string]interface{}, error) {
-	return applicationWriteRaw(http.MethodPut, basePath, apiKey, "/applications/"+applicationId, body)
+func ApplicationUpdateRaw(basePath string, headers map[string]string, applicationId string, body map[string]interface{}) (map[string]interface{}, error) {
+	return applicationWriteRaw(http.MethodPut, basePath, headers, "/applications/"+applicationId, body)
 }
 
 // ErrNotFound is returned by the Get/Delete raw helpers below when the
 // underlying object has been deleted outside Terraform.
 var ErrNotFound = errors.New("not found")
 
+// jcRawRequest builds a request for the raw helpers below, carrying the
+// provider configuration's default headers (x-api-key and, when configured,
+// x-org-id) so raw calls are scoped to the same organization as SDK calls.
+// Debug logging is deliberately off: resty's debug output includes request
+// headers, which would write the x-api-key to the TF_LOG output.
+func jcRawRequest(headers map[string]string) *resty.Request {
+	req := resty.New().SetTimeout(rawRequestTimeout).R().SetHeader("Accept", "application/json")
+	for k, v := range headers {
+		if v != "" {
+			req.SetHeader(k, v)
+		}
+	}
+	return req
+}
+
 // jcGetRaw fetches a raw JSON object from a v1 or v2 JumpCloud endpoint.
-func jcGetRaw(basePath, apiKey, path string) (map[string]interface{}, error) {
-	client := resty.New().SetDebug(true)
-	resp, err := client.R().
-		SetHeader("x-api-key", apiKey).
-		SetHeader("Accept", "application/json").
-		Get(basePath + path)
+func jcGetRaw(basePath string, headers map[string]string, path string) (map[string]interface{}, error) {
+	resp, err := jcRawRequest(headers).Get(basePath + path)
 	if err != nil {
 		return nil, err
 	}
@@ -132,12 +136,8 @@ func jcGetRaw(basePath, apiKey, path string) (map[string]interface{}, error) {
 
 // jcListRaw fetches the "results" array from a v1 list endpoint, as a slice of
 // raw JSON objects.
-func jcListRaw(basePath, apiKey, path string) ([]map[string]interface{}, error) {
-	client := resty.New().SetDebug(true)
-	resp, err := client.R().
-		SetHeader("x-api-key", apiKey).
-		SetHeader("Accept", "application/json").
-		Get(basePath + path)
+func jcListRaw(basePath string, headers map[string]string, path string) ([]map[string]interface{}, error) {
+	resp, err := jcRawRequest(headers).Get(basePath + path)
 	if err != nil {
 		return nil, err
 	}
@@ -158,12 +158,8 @@ func jcListRaw(basePath, apiKey, path string) ([]map[string]interface{}, error) 
 // jcListArrayRaw fetches a v2 list endpoint that returns a bare JSON array
 // directly (confirmed live for /push/configs and /webauthn/configs), unlike
 // v1 list endpoints (jcListRaw), which wrap results in a "results" key.
-func jcListArrayRaw(basePath, apiKey, path string) ([]map[string]interface{}, error) {
-	client := resty.New().SetDebug(true)
-	resp, err := client.R().
-		SetHeader("x-api-key", apiKey).
-		SetHeader("Accept", "application/json").
-		Get(basePath + path)
+func jcListArrayRaw(basePath string, headers map[string]string, path string) ([]map[string]interface{}, error) {
+	resp, err := jcRawRequest(headers).Get(basePath + path)
 	if err != nil {
 		return nil, err
 	}
@@ -183,12 +179,8 @@ func jcListArrayRaw(basePath, apiKey, path string) ([]map[string]interface{}, er
 // JumpCloud endpoint. Some V2 endpoints answer a successful write with 204 and
 // an empty body, so an empty response body is treated as success rather than
 // a decode error.
-func jcWriteRaw(method, basePath, apiKey, path string, body map[string]interface{}) (map[string]interface{}, error) {
-	client := resty.New().SetDebug(true)
-	req := client.R().
-		SetHeader("x-api-key", apiKey).
-		SetHeader("Content-Type", "application/json").
-		SetHeader("Accept", "application/json")
+func jcWriteRaw(method, basePath string, headers map[string]string, path string, body map[string]interface{}) (map[string]interface{}, error) {
+	req := jcRawRequest(headers).SetHeader("Content-Type", "application/json")
 	if body != nil {
 		req = req.SetBody(body)
 	}
@@ -231,19 +223,19 @@ func jcWriteRaw(method, basePath, apiKey, path string, body map[string]interface
 }
 
 // OrganizationsListRaw lists organizations visible to this API key (v1).
-func OrganizationsListRaw(basePath, apiKey string) ([]map[string]interface{}, error) {
-	return jcListRaw(basePath, apiKey, "/organizations")
+func OrganizationsListRaw(basePath string, headers map[string]string) ([]map[string]interface{}, error) {
+	return jcListRaw(basePath, headers, "/organizations")
 }
 
 // OrganizationGetRaw fetches the full, raw JSON representation of an
 // organization (v1), including its settings object.
-func OrganizationGetRaw(basePath, apiKey, orgId string) (map[string]interface{}, error) {
-	return jcGetRaw(basePath, apiKey, "/organizations/"+orgId)
+func OrganizationGetRaw(basePath string, headers map[string]string, orgId string) (map[string]interface{}, error) {
+	return jcGetRaw(basePath, headers, "/organizations/"+orgId)
 }
 
 // OrganizationUpdateRaw updates an organization (v1) from a raw request body.
-func OrganizationUpdateRaw(basePath, apiKey, orgId string, body map[string]interface{}) (map[string]interface{}, error) {
-	result, err := jcWriteRaw(http.MethodPut, basePath, apiKey, "/organizations/"+orgId, body)
+func OrganizationUpdateRaw(basePath string, headers map[string]string, orgId string, body map[string]interface{}) (map[string]interface{}, error) {
+	result, err := jcWriteRaw(http.MethodPut, basePath, headers, "/organizations/"+orgId, body)
 	if err != nil {
 		return nil, err
 	}
@@ -257,22 +249,22 @@ func OrganizationUpdateRaw(basePath, apiKey, orgId string, body map[string]inter
 
 // AuthPolicyGetRaw fetches the full, raw JSON representation of an
 // authentication policy (v2).
-func AuthPolicyGetRaw(basePath, apiKey, id string) (map[string]interface{}, error) {
-	return jcGetRaw(basePath, apiKey, "/authn/policies/"+id)
+func AuthPolicyGetRaw(basePath string, headers map[string]string, id string) (map[string]interface{}, error) {
+	return jcGetRaw(basePath, headers, "/authn/policies/"+id)
 }
 
 // AuthPolicyCreateRaw creates an authentication policy (v2) from a raw request body.
-func AuthPolicyCreateRaw(basePath, apiKey string, body map[string]interface{}) (map[string]interface{}, error) {
-	return jcWriteRaw(http.MethodPost, basePath, apiKey, "/authn/policies", body)
+func AuthPolicyCreateRaw(basePath string, headers map[string]string, body map[string]interface{}) (map[string]interface{}, error) {
+	return jcWriteRaw(http.MethodPost, basePath, headers, "/authn/policies", body)
 }
 
 // AuthPolicyUpdateRaw updates an authentication policy (v2) from a raw request body.
-func AuthPolicyUpdateRaw(basePath, apiKey, id string, body map[string]interface{}) (map[string]interface{}, error) {
+func AuthPolicyUpdateRaw(basePath string, headers map[string]string, id string, body map[string]interface{}) (map[string]interface{}, error) {
 	// Confirmed live via a captured browser request: this endpoint uses PATCH,
 	// not PUT (PUT 404s). jc-cli's generic V2Client.Update always uses PUT,
 	// which is wrong for this specific endpoint -- another case of jc-cli's
 	// own assumptions not holding for this unverified area.
-	result, err := jcWriteRaw(http.MethodPatch, basePath, apiKey, "/authn/policies/"+id, body)
+	result, err := jcWriteRaw(http.MethodPatch, basePath, headers, "/authn/policies/"+id, body)
 	if err != nil {
 		return nil, err
 	}
@@ -283,9 +275,55 @@ func AuthPolicyUpdateRaw(basePath, apiKey, id string, body map[string]interface{
 }
 
 // AuthPolicyDeleteRaw deletes an authentication policy (v2).
-func AuthPolicyDeleteRaw(basePath, apiKey, id string) error {
-	_, err := jcWriteRaw(http.MethodDelete, basePath, apiKey, "/authn/policies/"+id, nil)
+func AuthPolicyDeleteRaw(basePath string, headers map[string]string, id string) error {
+	_, err := jcWriteRaw(http.MethodDelete, basePath, headers, "/authn/policies/"+id, nil)
 	return err
+}
+
+const metadataXmlTimeout = 30 * time.Second
+
+// rawRequestTimeout bounds every request made through jcRawRequest. The raw
+// helpers take no cancellation context, so without a timeout a server that
+// accepts the connection but stalls would leave refresh/apply waiting forever
+// while Terraform holds its state lock. A var so tests can shorten it.
+var rawRequestTimeout = 30 * time.Second
+
+// isNotFound reports whether an SDK call failed because the object does not exist.
+// The SDK returns the HTTP response alongside the error for non-2xx statuses; the "EOF"
+// check is kept for the empty-body responses the API has historically returned.
+func isNotFound(res *http.Response, err error) bool {
+	if err == nil {
+		return false
+	}
+	if res != nil && res.StatusCode == http.StatusNotFound {
+		return true
+	}
+	return err.Error() == "EOF"
+}
+
+// discoverSingletonConfigId lists a v2 config collection that is expected to
+// hold exactly one object per organization and returns that object's id,
+// trying idKeys in order. Like organization discovery, it refuses to guess
+// when the list holds several objects: list order isn't a selection contract,
+// and writing to the wrong config would silently change the wrong settings.
+func discoverSingletonConfigId(config *jcapiv2.Configuration, path, name string, idKeys ...string) (string, error) {
+	configs, err := jcListArrayRaw(config.BasePath, config.DefaultHeader, path)
+	if err != nil {
+		return "", err
+	}
+	if len(configs) == 0 {
+		return "", fmt.Errorf("no %s configs visible to this API key; set config_id explicitly", name)
+	}
+	if len(configs) > 1 {
+		return "", fmt.Errorf("GET %s returned %d %s configs; set config_id explicitly to choose one",
+			path, len(configs), name)
+	}
+	for _, k := range idKeys {
+		if id, _ := configs[0][k].(string); id != "" {
+			return id, nil
+		}
+	}
+	return "", fmt.Errorf("could not determine %s config id from %s response", name, path)
 }
 
 // Gets an application's metadata XML for SAML authentication
@@ -293,8 +331,9 @@ func AuthPolicyDeleteRaw(basePath, apiKey, id string) error {
 func GetApplicationMetadataXml(orgId string, applicationId string, apiKey string) (string, error) {
 	url := "https://console.jumpcloud.com/api/organizations/" + orgId + "/applications/" + applicationId + "/metadata.xml"
 
-	// debug is always set to true, but output will only be shown if TF_LOG=DEBUG is set
-	client := resty.New().SetDebug(true)
+	// Debug logging is deliberately off: resty's debug output includes request headers,
+	// which would write the x-api-key to the TF_LOG output.
+	client := resty.New().SetTimeout(metadataXmlTimeout)
 
 	resp, err := client.R().
 		SetHeader("x-api-key", apiKey).
@@ -304,11 +343,7 @@ func GetApplicationMetadataXml(orgId string, applicationId string, apiKey string
 		return "", err
 	}
 
-	log.Println("Status Code:", resp.StatusCode())
-	log.Println("Status     :", resp.Status())
-	log.Println("Time       :", resp.Time())
-	log.Println("Received At:", resp.ReceivedAt())
-	log.Println("Body       :\n", resp)
+	log.Printf("[DEBUG] metadata XML for application %s: status=%s time=%s", applicationId, resp.Status(), resp.Time())
 
 	// Without this check any non-2xx response body -- an auth failure, a 404, an HTML
 	// error page -- is returned as if it were the metadata XML and stored in state.
@@ -318,6 +353,31 @@ func GetApplicationMetadataXml(orgId string, applicationId string, apiKey string
 	}
 
 	return string(resp.Body()), nil
+}
+
+// stringOr returns v as a string, or def when v is absent, null, or not a string.
+func stringOr(v interface{}, def string) string {
+	if s, ok := v.(string); ok {
+		return s
+	}
+	return def
+}
+
+// boolOr returns v as a bool, or def when v is absent, null, or not a bool.
+func boolOr(v interface{}, def bool) bool {
+	if b, ok := v.(bool); ok {
+		return b
+	}
+	return def
+}
+
+// intOr returns v as an int, or def when v is absent, null, or not a number.
+// encoding/json decodes every JSON number into a float64.
+func intOr(v interface{}, def int) int {
+	if f, ok := v.(float64); ok {
+		return int(f)
+	}
+	return def
 }
 
 func stringInSlice(a string, list []string) bool {

@@ -2,7 +2,6 @@ package jumpcloud
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 
 	jcapiv2 "github.com/TheJumpCloud/jcapi-go/v2"
@@ -28,7 +27,12 @@ func resourceWebauthnSettings() *schema.Resource {
 		Description: "Manages JumpCloud's org-wide WebAuthn configuration. " +
 			"Built from a captured browser request against JumpCloud's \"MFA " +
 			"Configurations\" admin page (WebAuthn's \"Additional Settings\" " +
-			"section) -- not documented anywhere else.",
+			"section) -- not documented anywhere else.\n\n" +
+			"Warning: destroying this resource turns security key " +
+			"self-registration off. The WebAuthn config is a JumpCloud-created " +
+			"object that always exists, so destroy resets the setting to false " +
+			"rather than just ceasing to manage it; users can no longer " +
+			"register their own security keys.",
 		Create: resourceWebauthnSettingsCreateUpdate,
 		Read:   resourceWebauthnSettingsRead,
 		Update: resourceWebauthnSettingsCreateUpdate,
@@ -60,27 +64,12 @@ func resolveWebauthnConfigId(config *jcapiv2.Configuration, d *schema.ResourceDa
 		return v.(string), nil
 	}
 
-	apiKey := config.DefaultHeader["x-api-key"]
-	configs, err := jcListArrayRaw(config.BasePath, apiKey, "/webauthn/configs")
-	if err != nil {
-		return "", err
-	}
-	if len(configs) == 0 {
-		return "", fmt.Errorf("no webauthn configs visible to this API key; set config_id explicitly")
-	}
-	id, _ := configs[0]["_id"].(string)
-	if id == "" {
-		id, _ = configs[0]["id"].(string)
-	}
-	if id == "" {
-		return "", fmt.Errorf("could not determine webauthn config id from /webauthn/configs response")
-	}
-	return id, nil
+	return discoverSingletonConfigId(config, "/webauthn/configs", "webauthn", "_id", "id")
 }
 
 func resourceWebauthnSettingsCreateUpdate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*jcapiv2.Configuration)
-	apiKey := config.DefaultHeader["x-api-key"]
+	headers := config.DefaultHeader
 
 	configId, err := resolveWebauthnConfigId(config, d)
 	if err != nil {
@@ -90,7 +79,7 @@ func resourceWebauthnSettingsCreateUpdate(d *schema.ResourceData, meta interface
 	body := map[string]interface{}{
 		"allowSelfRegistration": d.Get("allow_self_registration").(bool),
 	}
-	if _, err := jcWriteRaw(http.MethodPut, config.BasePath, apiKey, "/webauthn/configs/"+configId, body); err != nil {
+	if _, err := jcWriteRaw(http.MethodPut, config.BasePath, headers, "/webauthn/configs/"+configId, body); err != nil {
 		return err
 	}
 
@@ -100,9 +89,9 @@ func resourceWebauthnSettingsCreateUpdate(d *schema.ResourceData, meta interface
 
 func resourceWebauthnSettingsRead(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*jcapiv2.Configuration)
-	apiKey := config.DefaultHeader["x-api-key"]
+	headers := config.DefaultHeader
 
-	raw, err := jcGetRaw(config.BasePath, apiKey, "/webauthn/configs/"+d.Id())
+	raw, err := jcGetRaw(config.BasePath, headers, "/webauthn/configs/"+d.Id())
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			d.SetId("")
@@ -114,20 +103,17 @@ func resourceWebauthnSettingsRead(d *schema.ResourceData, meta interface{}) erro
 	if err := d.Set("config_id", d.Id()); err != nil {
 		return err
 	}
-	if v, ok := raw["allowSelfRegistration"].(bool); ok {
-		if err := d.Set("allow_self_registration", v); err != nil {
-			return err
-		}
-	}
-	return nil
+	// Set unconditionally, defaulting when the response omits the field, so a
+	// missing field can't leave a stale value in state.
+	return d.Set("allow_self_registration", boolOr(raw["allowSelfRegistration"], false))
 }
 
 func resourceWebauthnSettingsDelete(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*jcapiv2.Configuration)
-	apiKey := config.DefaultHeader["x-api-key"]
+	headers := config.DefaultHeader
 
 	body := map[string]interface{}{"allowSelfRegistration": false}
-	if _, err := jcWriteRaw(http.MethodPut, config.BasePath, apiKey, "/webauthn/configs/"+d.Id(), body); err != nil {
+	if _, err := jcWriteRaw(http.MethodPut, config.BasePath, headers, "/webauthn/configs/"+d.Id(), body); err != nil && !errors.Is(err, ErrNotFound) {
 		return err
 	}
 	d.SetId("")

@@ -5,6 +5,7 @@ import (
 
 	jcapiv2 "github.com/TheJumpCloud/jcapi-go/v2"
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/helper/validation"
 )
 
 // mfaEnrollmentPolicyID is a fixed, synthetic Terraform resource id: the
@@ -35,7 +36,11 @@ func resourceMfaEnrollmentPolicy() *schema.Resource {
 			"before enforcement begins. Built from a captured browser request " +
 			"against JumpCloud's \"MFA Configurations\" admin page -- not " +
 			"documented anywhere else, including this provider's Go SDK and " +
-			"JumpCloud's own actively maintained CLI.",
+			"JumpCloud's own actively maintained CLI.\n\n" +
+			"Warning: destroying this resource relaxes MFA enrollment. The " +
+			"enrollment policy is a singleton that always exists, so destroy " +
+			"resets it to JumpCloud's default (no primary or backup factor " +
+			"required, grace period 0) rather than just ceasing to manage it.",
 		Create: resourceMfaEnrollmentPolicyCreateUpdate,
 		Read:   resourceMfaEnrollmentPolicyRead,
 		Update: resourceMfaEnrollmentPolicyCreateUpdate,
@@ -54,9 +59,10 @@ func resourceMfaEnrollmentPolicy() *schema.Resource {
 			"grace_period_days": {
 				Description: "Days a user has to enroll a factor before " +
 					"enforcement begins.",
-				Type:     schema.TypeInt,
-				Optional: true,
-				Default:  0,
+				Type:         schema.TypeInt,
+				Optional:     true,
+				Default:      0,
+				ValidateFunc: validation.IntAtLeast(0),
 			},
 			"require_backup_factor": {
 				Description: "Require every user to also enroll a backup " +
@@ -70,13 +76,13 @@ func resourceMfaEnrollmentPolicy() *schema.Resource {
 }
 
 func mfaEnrollmentPolicyWrite(config *jcapiv2.Configuration, d *schema.ResourceData) error {
-	apiKey := config.DefaultHeader["x-api-key"]
+	headers := config.DefaultHeader
 	body := map[string]interface{}{
 		"requirePrimaryFactor": d.Get("require_primary_factor").(bool),
 		"gracePeriodDays":      d.Get("grace_period_days").(int),
 		"requireBackupFactor":  d.Get("require_backup_factor").(bool),
 	}
-	_, err := jcWriteRaw(http.MethodPut, config.BasePath, apiKey, "/mfa/enrollmentPolicy", body)
+	_, err := jcWriteRaw(http.MethodPut, config.BasePath, headers, "/mfa/enrollmentPolicy", body)
 	return err
 }
 
@@ -91,42 +97,38 @@ func resourceMfaEnrollmentPolicyCreateUpdate(d *schema.ResourceData, meta interf
 
 func resourceMfaEnrollmentPolicyRead(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*jcapiv2.Configuration)
-	apiKey := config.DefaultHeader["x-api-key"]
+	headers := config.DefaultHeader
 
-	raw, err := jcGetRaw(config.BasePath, apiKey, "/mfa/enrollmentPolicy")
+	raw, err := jcGetRaw(config.BasePath, headers, "/mfa/enrollmentPolicy")
 	if err != nil {
 		return err
 	}
 
 	d.SetId(mfaEnrollmentPolicyID)
-	if v, ok := raw["requirePrimaryFactor"].(bool); ok {
-		if err := d.Set("require_primary_factor", v); err != nil {
-			return err
-		}
+	// Set unconditionally, defaulting when the response omits a field, so a
+	// missing field can't leave a stale value in state.
+	if err := d.Set("require_primary_factor", boolOr(raw["requirePrimaryFactor"], false)); err != nil {
+		return err
 	}
-	if v, ok := raw["gracePeriodDays"].(float64); ok {
-		if err := d.Set("grace_period_days", int(v)); err != nil {
-			return err
-		}
+	if err := d.Set("grace_period_days", intOr(raw["gracePeriodDays"], 0)); err != nil {
+		return err
 	}
-	if v, ok := raw["requireBackupFactor"].(bool); ok {
-		if err := d.Set("require_backup_factor", v); err != nil {
-			return err
-		}
+	if err := d.Set("require_backup_factor", boolOr(raw["requireBackupFactor"], false)); err != nil {
+		return err
 	}
 	return nil
 }
 
 func resourceMfaEnrollmentPolicyDelete(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*jcapiv2.Configuration)
-	apiKey := config.DefaultHeader["x-api-key"]
+	headers := config.DefaultHeader
 
 	body := map[string]interface{}{
 		"requirePrimaryFactor": false,
 		"gracePeriodDays":      0,
 		"requireBackupFactor":  false,
 	}
-	if _, err := jcWriteRaw(http.MethodPut, config.BasePath, apiKey, "/mfa/enrollmentPolicy", body); err != nil {
+	if _, err := jcWriteRaw(http.MethodPut, config.BasePath, headers, "/mfa/enrollmentPolicy", body); err != nil {
 		return err
 	}
 	d.SetId("")

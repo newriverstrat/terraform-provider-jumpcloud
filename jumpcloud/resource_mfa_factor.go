@@ -2,7 +2,6 @@ package jumpcloud
 
 import (
 	"errors"
-	"log"
 	"net/http"
 
 	jcapiv1 "github.com/TheJumpCloud/jcapi-go/v1"
@@ -31,7 +30,12 @@ func resourceMfaFactor() *schema.Resource {
 			"\"totp\", \"push\", \"sms\") is enabled org-wide. Built from a " +
 			"captured browser request against JumpCloud's \"MFA Configurations\" " +
 			"admin page -- not documented anywhere else, including this " +
-			"provider's Go SDK and JumpCloud's own actively maintained CLI.",
+			"provider's Go SDK and JumpCloud's own actively maintained CLI.\n\n" +
+			"Warning: destroying this resource disables the factor type " +
+			"org-wide (unless JumpCloud reports it as read_only), rather than " +
+			"just ceasing to manage it. Users who rely on that factor lose it as " +
+			"an option, and any authentication policy that requires it can no " +
+			"longer be satisfied with it.",
 		Create: resourceMfaFactorCreateUpdate,
 		Read:   resourceMfaFactorRead,
 		Update: resourceMfaFactorCreateUpdate,
@@ -68,8 +72,8 @@ func resourceMfaFactor() *schema.Resource {
 }
 
 func mfaFactorWrite(configv1 *jcapiv1.Configuration, factorType string, enabled bool) error {
-	apiKey := configv1.DefaultHeader["x-api-key"]
-	_, err := jcWriteRaw(http.MethodPut, configv1.BasePath, apiKey, "/userportal/mfa/"+factorType, map[string]interface{}{
+	headers := configv1.DefaultHeader
+	_, err := jcWriteRaw(http.MethodPut, configv1.BasePath, headers, "/userportal/mfa/"+factorType, map[string]interface{}{
 		"type":    factorType,
 		"enabled": enabled,
 	})
@@ -91,9 +95,9 @@ func resourceMfaFactorCreateUpdate(d *schema.ResourceData, meta interface{}) err
 
 func resourceMfaFactorRead(d *schema.ResourceData, meta interface{}) error {
 	configv1 := convertV2toV1Config(meta.(*jcapiv2.Configuration))
-	apiKey := configv1.DefaultHeader["x-api-key"]
+	headers := configv1.DefaultHeader
 
-	raw, err := jcGetRaw(configv1.BasePath, apiKey, "/userportal/mfa/"+d.Id())
+	raw, err := jcGetRaw(configv1.BasePath, headers, "/userportal/mfa/"+d.Id())
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			d.SetId("")
@@ -101,25 +105,22 @@ func resourceMfaFactorRead(d *schema.ResourceData, meta interface{}) error {
 		}
 		// GET is confirmed to work for webauthn and totp (a live capture of
 		// the latter returned {"type":"totp","enabled":true,"id":"",
-		// "readOnly":false}), but not every factor_type is verified yet.
-		// Don't fail plan/apply over an unverified one -- leave the
-		// already-recorded state as the source of truth.
-		log.Printf("[WARN] skipping refresh for mfa factor %s: %s", d.Id(), err)
-		return nil
+		// "readOnly":false}). Any other failure -- auth, outage, or a
+		// factor_type the API doesn't support -- fails Read rather than
+		// leaving stale state looking freshly refreshed.
+		return err
 	}
 
 	if err := d.Set("factor_type", d.Id()); err != nil {
 		return err
 	}
-	if v, ok := raw["enabled"].(bool); ok {
-		if err := d.Set("enabled", v); err != nil {
-			return err
-		}
+	// Set unconditionally, defaulting when the response omits a field, so a
+	// missing field can't leave a stale value in state.
+	if err := d.Set("enabled", boolOr(raw["enabled"], true)); err != nil {
+		return err
 	}
-	if v, ok := raw["readOnly"].(bool); ok {
-		if err := d.Set("read_only", v); err != nil {
-			return err
-		}
+	if err := d.Set("read_only", boolOr(raw["readOnly"], false)); err != nil {
+		return err
 	}
 	return nil
 }
@@ -128,8 +129,14 @@ func resourceMfaFactorDelete(d *schema.ResourceData, meta interface{}) error {
 	configv1 := convertV2toV1Config(meta.(*jcapiv2.Configuration))
 	factorType := d.Get("factor_type").(string)
 
-	if err := mfaFactorWrite(configv1, factorType, false); err != nil {
-		return err
+	// A read_only factor's enabled state is server-controlled, so a disable
+	// write can only fail -- and would block destroy forever. Just stop
+	// tracking it. Likewise, a factor type the API no longer knows (404) is
+	// already gone.
+	if !d.Get("read_only").(bool) {
+		if err := mfaFactorWrite(configv1, factorType, false); err != nil && !errors.Is(err, ErrNotFound) {
+			return err
+		}
 	}
 	d.SetId("")
 	return nil

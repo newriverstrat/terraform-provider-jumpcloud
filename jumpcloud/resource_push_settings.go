@@ -2,7 +2,6 @@ package jumpcloud
 
 import (
 	"errors"
-	"fmt"
 	"net/http"
 
 	jcapiv2 "github.com/TheJumpCloud/jcapi-go/v2"
@@ -24,7 +23,9 @@ func resourcePushSettings() *schema.Resource {
 		Description: "Manages JumpCloud's org-wide Push (JumpCloud Protect) " +
 			"factor configuration. Built from a captured browser request " +
 			"against JumpCloud's \"MFA Configurations\" admin page (Push's " +
-			"\"Additional Settings\" section) -- not documented anywhere else.",
+			"\"Additional Settings\" section) -- not documented anywhere else.\n\n" +
+			"Destroying this resource only removes it from Terraform state: the " +
+			"push configuration is left exactly as last applied, not reset.",
 		Create: resourcePushSettingsCreateUpdate,
 		Read:   resourcePushSettingsRead,
 		Update: resourcePushSettingsCreateUpdate,
@@ -88,54 +89,38 @@ func resolvePushConfigId(config *jcapiv2.Configuration, d *schema.ResourceData) 
 		return v.(string), nil
 	}
 
-	apiKey := config.DefaultHeader["x-api-key"]
-	configs, err := jcListArrayRaw(config.BasePath, apiKey, "/push/configs")
-	if err != nil {
-		return "", err
-	}
-	if len(configs) == 0 {
-		return "", fmt.Errorf("no push configs visible to this API key; set config_id explicitly")
-	}
-	id, _ := configs[0]["id"].(string)
-	if id == "" {
-		id, _ = configs[0]["_id"].(string)
-	}
-	if id == "" {
-		return "", fmt.Errorf("could not determine push config id from /push/configs response")
-	}
-	return id, nil
+	return discoverSingletonConfigId(config, "/push/configs", "push", "id", "_id")
 }
 
 func resourcePushSettingsCreateUpdate(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*jcapiv2.Configuration)
-	apiKey := config.DefaultHeader["x-api-key"]
+	headers := config.DefaultHeader
 
 	configId, err := resolvePushConfigId(config, d)
 	if err != nil {
 		return err
 	}
 
-	// readOnly is server-controlled, never user-set -- preserve whatever the
-	// API last reported rather than guessing a value for it.
-	readOnly := false
-	if current, err := jcGetRaw(config.BasePath, apiKey, "/push/configs/"+configId); err == nil {
-		if v, ok := current["readOnly"].(bool); ok {
-			readOnly = v
-		}
+	// The PUT needs the full object back, including server-controlled fields
+	// like readOnly, so overlay the managed fields onto the current object. If
+	// the GET fails, abort instead of writing guessed values for those fields.
+	body, err := jcGetRaw(config.BasePath, headers, "/push/configs/"+configId)
+	if err != nil {
+		return err
 	}
+	body["id"] = configId
+	body["userVerification"] = d.Get("user_verification").(string)
+	body["isTotpIntegrated"] = d.Get("is_totp_integrated").(bool)
+	body["exclusionGroups"] = stringSliceFromInterfaceList(d.Get("exclusion_groups").([]interface{}))
+	limit, ok := body["concurrentLimit"].(map[string]interface{})
+	if !ok {
+		limit = map[string]interface{}{}
+		body["concurrentLimit"] = limit
+	}
+	limit["enabled"] = d.Get("concurrent_limit_enabled").(bool)
+	limit["max"] = d.Get("concurrent_limit_max").(int)
 
-	body := map[string]interface{}{
-		"id":               configId,
-		"userVerification": d.Get("user_verification").(string),
-		"isTotpIntegrated": d.Get("is_totp_integrated").(bool),
-		"exclusionGroups":  stringSliceFromInterfaceList(d.Get("exclusion_groups").([]interface{})),
-		"readOnly":         readOnly,
-		"concurrentLimit": map[string]interface{}{
-			"enabled": d.Get("concurrent_limit_enabled").(bool),
-			"max":     d.Get("concurrent_limit_max").(int),
-		},
-	}
-	if _, err := jcWriteRaw(http.MethodPut, config.BasePath, apiKey, "/push/configs/"+configId, body); err != nil {
+	if _, err := jcWriteRaw(http.MethodPut, config.BasePath, headers, "/push/configs/"+configId, body); err != nil {
 		return err
 	}
 
@@ -145,9 +130,9 @@ func resourcePushSettingsCreateUpdate(d *schema.ResourceData, meta interface{}) 
 
 func resourcePushSettingsRead(d *schema.ResourceData, meta interface{}) error {
 	config := meta.(*jcapiv2.Configuration)
-	apiKey := config.DefaultHeader["x-api-key"]
+	headers := config.DefaultHeader
 
-	raw, err := jcGetRaw(config.BasePath, apiKey, "/push/configs/"+d.Id())
+	raw, err := jcGetRaw(config.BasePath, headers, "/push/configs/"+d.Id())
 	if err != nil {
 		if errors.Is(err, ErrNotFound) {
 			d.SetId("")
@@ -159,29 +144,18 @@ func resourcePushSettingsRead(d *schema.ResourceData, meta interface{}) error {
 	if err := d.Set("config_id", d.Id()); err != nil {
 		return err
 	}
-	if v, ok := raw["userVerification"].(string); ok {
-		if err := d.Set("user_verification", v); err != nil {
+	// Set unconditionally, defaulting when the response omits a field, so a
+	// missing field can't leave a stale value in state.
+	limit, _ := raw["concurrentLimit"].(map[string]interface{})
+	for k, v := range map[string]interface{}{
+		"user_verification":        stringOr(raw["userVerification"], "discouraged"),
+		"is_totp_integrated":       boolOr(raw["isTotpIntegrated"], true),
+		"exclusion_groups":         stringSliceFromAny(raw["exclusionGroups"]),
+		"concurrent_limit_enabled": boolOr(limit["enabled"], true),
+		"concurrent_limit_max":     intOr(limit["max"], 1),
+	} {
+		if err := d.Set(k, v); err != nil {
 			return err
-		}
-	}
-	if v, ok := raw["isTotpIntegrated"].(bool); ok {
-		if err := d.Set("is_totp_integrated", v); err != nil {
-			return err
-		}
-	}
-	if err := d.Set("exclusion_groups", stringSliceFromAny(raw["exclusionGroups"])); err != nil {
-		return err
-	}
-	if limit, ok := raw["concurrentLimit"].(map[string]interface{}); ok {
-		if v, ok := limit["enabled"].(bool); ok {
-			if err := d.Set("concurrent_limit_enabled", v); err != nil {
-				return err
-			}
-		}
-		if v, ok := limit["max"].(float64); ok {
-			if err := d.Set("concurrent_limit_max", int(v)); err != nil {
-				return err
-			}
 		}
 	}
 	return nil
