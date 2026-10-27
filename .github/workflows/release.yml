@@ -1,35 +1,107 @@
 name: release
+
 on:
+  # Normal path: tag a commit on nrs-master and push the tag.
   push:
     tags:
       - 'v*'
+
+  # Manual path: release an arbitrary revision under a chosen version, for
+  # prerelease builds you want to install and test before committing to a
+  # real release. The workflow creates the tag for you at that revision.
+  workflow_dispatch:
+    inputs:
+      revision:
+        description: 'Git revision to release (branch, tag or SHA)'
+        required: true
+        default: 'nrs-master'
+      version:
+        description: 'Version to publish, with v prefix. Must be in the v100.x.x series. Use a prerelease suffix for test builds, e.g. v100.1.0-rc.1'
+        required: true
+
 permissions:
   contents: write
+
 jobs:
   goreleaser:
     runs-on: ubuntu-latest
     steps:
       - name: Checkout
-        uses: actions/checkout@v4
+        uses: actions/checkout@v7
+        with:
+          # On a manual run this is the revision being released; on a tag push
+          # it is the tag itself. fetch-depth: 0 because GoReleaser needs the
+          # full history and all tags to resolve the version and changelog.
+          ref: ${{ github.event.inputs.revision || github.ref }}
+          fetch-depth: 0
+
+      # Runs on both paths. Our releases live in the v100.x.x series specifically
+      # so they can never be confused with, or collide with, upstream's
+      # numbering. Enforcing it here also closes a real footgun: upstream's tags
+      # are reachable from our history, so `git push origin --tags` would
+      # otherwise publish their code under our namespace.
+      - name: Validate release version
+        env:
+          VERSION: ${{ github.event_name == 'workflow_dispatch' && github.event.inputs.version || github.ref_name }}
+        run: |
+          set -euo pipefail
+
+          if ! printf '%s' "$VERSION" | grep -Eq '^v100\.[0-9]+\.[0-9]+(-[0-9A-Za-z.]+)?$'; then
+            echo "::error::'$VERSION' is not a version this fork publishes."
+            echo "::error::Releases must be in the v100.x.x series, e.g. v100.0.0 or v100.1.0-rc.1."
+            echo "::error::If this was an upstream tag, do not publish it under our namespace."
+            exit 1
+          fi
+
+          echo "Releasing $VERSION"
+
+      # GoReleaser takes the version from the tag at HEAD, so a manual run has
+      # to create one.
+      - name: Create tag for manual release
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          VERSION: ${{ github.event.inputs.version }}
+          REVISION: ${{ github.event.inputs.revision }}
+        run: |
+          set -euo pipefail
+
+          if git rev-parse -q --verify "refs/tags/$VERSION" >/dev/null; then
+            echo "::error::Tag $VERSION already exists. Versions are immutable once published to the registry - pick a new one."
+            exit 1
+          fi
+
+          git config user.name 'github-actions[bot]'
+          git config user.email '41898282+github-actions[bot]@users.noreply.github.com'
+          git tag -a "$VERSION" -m "Release $VERSION from $REVISION"
+
+          # Pushed with GITHUB_TOKEN, whose events deliberately do not trigger
+          # workflows - so this does not re-enter via the tag-push trigger
+          # above. This run publishes the release itself.
+          git push origin "refs/tags/$VERSION"
+
+          echo "Tagged $(git rev-parse --short HEAD) as $VERSION"
 
       - name: Set up Go
-        uses: actions/setup-go@v4
+        uses: actions/setup-go@v7
         with:
-          go-version: '1.21'
+          # Single source of truth, so the release build can't drift from go.mod.
+          go-version-file: go.mod
 
       - name: Import GPG key
-        uses: crazy-max/ghaction-import-gpg@v5
+        uses: crazy-max/ghaction-import-gpg@v7
         id: import_gpg
         with:
           gpg_private_key: ${{ secrets.GPG_PRIVATE_KEY }}
           passphrase: ${{ secrets.PASSPHRASE }}
-      
+
       - name: Clean dist directory
         run: rm -rf dist/
-      
+
       - name: Run GoReleaser
-        uses: goreleaser/goreleaser-action@v4
+        uses: goreleaser/goreleaser-action@v7
         with:
+          # "latest" resolves to the newest GoReleaser v2, which matches the
+          # `version: 2` declared in .goreleaser.yml.
           version: latest
           args: release
         env:
