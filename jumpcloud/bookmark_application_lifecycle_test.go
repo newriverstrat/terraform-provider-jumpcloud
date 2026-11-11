@@ -59,7 +59,8 @@ func consoleBookmarkBody() map[string]interface{} {
 func TestBookmarkApplicationLifecycle(t *testing.T) {
 	t.Setenv("JUMPCLOUD_API_KEY", "k")
 	t.Setenv("JUMPCLOUD_ORG_ID", "")
-	f := &fakeApplications{apps: map[string]map[string]interface{}{}}
+	// The live API accepts isBookmark on a write but does not return it.
+	f := &fakeApplications{apps: map[string]map[string]interface{}{}, dropOnStore: []string{"isBookmark"}}
 	srv := httptest.NewServer(f)
 	defer srv.Close()
 
@@ -115,8 +116,13 @@ func TestBookmarkApplicationLifecycle(t *testing.T) {
 					if a["keywords"] != "set-in-console" {
 						return fmt.Errorf("unmanaged field was reset by an update: keywords=%v", a["keywords"])
 					}
-					if a["isBookmark"] != true || a["name"] != "bookmark" {
+					if sso, _ := a["sso"].(map[string]interface{}); sso["type"] != "bookmark" || a["name"] != "bookmark" {
 						return fmt.Errorf("update lost the bookmark identity: %v", a)
+					}
+					// GET does not return isBookmark, so the update's seed lacks it;
+					// the update must still send it, as the console does.
+					if f.lastBody()["isBookmark"] != true {
+						return fmt.Errorf("update did not send isBookmark: %v", f.lastBody())
 					}
 					return nil
 				},
@@ -159,7 +165,7 @@ func TestBookmarkApplicationImportRejectsNonBookmark(t *testing.T) {
 func TestBookmarkApplicationDeletedOutOfBandIsRecreated(t *testing.T) {
 	t.Setenv("JUMPCLOUD_API_KEY", "k")
 	t.Setenv("JUMPCLOUD_ORG_ID", "")
-	f := &fakeApplications{apps: map[string]map[string]interface{}{}}
+	f := &fakeApplications{apps: map[string]map[string]interface{}{}, dropOnStore: []string{"isBookmark"}}
 	srv := httptest.NewServer(f)
 	defer srv.Close()
 

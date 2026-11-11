@@ -93,7 +93,7 @@ func resourceBookmarkApplicationRead(d *schema.ResourceData, meta interface{}) e
 
 	// Importing the ID of a SAML (or other) application would otherwise read
 	// back as a bookmark with an empty URL, and the next apply would rewrite it.
-	if isBookmark, _ := raw["isBookmark"].(bool); !isBookmark {
+	if !isBookmarkApplication(raw) {
 		return fmt.Errorf("application %s is not a bookmark application; manage it with jumpcloud_application instead", d.Id())
 	}
 
@@ -149,6 +149,20 @@ func resourceBookmarkApplicationUpdate(d *schema.ResourceData, meta interface{})
 	return resourceBookmarkApplicationRead(d, meta)
 }
 
+// isBookmarkApplication reports whether a raw application is a bookmark. The
+// API stores that as sso.type "bookmark". `isBookmark` is only something the
+// console sends on a write: confirmed against the live API, it is not returned
+// by GET /applications/{id}.
+func isBookmarkApplication(raw map[string]interface{}) bool {
+	if sso, ok := raw["sso"].(map[string]interface{}); ok {
+		if t, _ := sso["type"].(string); t == "bookmark" {
+			return true
+		}
+	}
+	isBookmark, _ := raw["isBookmark"].(bool)
+	return isBookmark
+}
+
 // buildBookmarkApplicationRequestBody applies this resource's fields onto seed
 // (nil for Create, or the application's current raw state for Update) and
 // returns the result as the request body.
@@ -181,6 +195,10 @@ func buildBookmarkApplicationRequestBody(seed map[string]interface{}, d *schema.
 			"ssoFileName":               "",
 		}
 	}
+
+	// Not returned by GET, so absent from an Update's seed; the console always
+	// sends it.
+	body["isBookmark"] = true
 
 	body["displayLabel"] = d.Get("display_label").(string)
 	body["ssoUrl"] = d.Get("url").(string)
