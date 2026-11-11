@@ -44,7 +44,8 @@ func resourceBookmarkApplication() *schema.Resource {
 			},
 			"color": {
 				Description: "Hex colour of the bookmark's tile, for example `#006CAC`. " +
-					"Omit it to use JumpCloud's default colour.",
+					"Omit it (an empty string counts as omitted) to use JumpCloud's default colour " +
+					"on create and to keep the current colour on update.",
 				Type:     schema.TypeString,
 				Optional: true,
 				Computed: true,
