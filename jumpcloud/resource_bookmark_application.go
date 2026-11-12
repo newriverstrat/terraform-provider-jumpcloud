@@ -114,10 +114,12 @@ func resourceBookmarkApplicationRead(d *schema.ResourceData, meta interface{}) e
 			return err
 		}
 	}
-	if v, ok := raw["description"].(string); ok {
-		if err := d.Set("description", v); err != nil {
-			return err
-		}
+	// Always set, "" when the response has no description: if it was cleared
+	// outside Terraform, the stale value must not stay in state (that would hide
+	// the drift and send it back on the next update).
+	description, _ := raw["description"].(string)
+	if err := d.Set("description", description); err != nil {
+		return err
 	}
 	if v, ok := raw["active"].(bool); ok {
 		if err := d.Set("active", v); err != nil {
