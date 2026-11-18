@@ -79,7 +79,7 @@ func resourceScimAttributeMapping() *schema.Resource {
 			},
 			"destination": {
 				Description: "The downstream (SCIM) attribute to set, e.g. " +
-					"`urn:ietf:params:scim:schemas:extension:2.0:User:defaultRole`.",
+					"`urn:ietf:params:scim:schemas:extension:2.0:User.defaultRole`.",
 				Type:     schema.TypeString,
 				Required: true,
 				ForceNew: true,

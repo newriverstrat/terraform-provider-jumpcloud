@@ -19,7 +19,7 @@ Only the `USER` resource type is supported. Rules the connector ships with (`def
 # Send a custom attribute of the user's groups to a downstream SCIM user attribute.
 resource "jumpcloud_scim_attribute_mapping" "default_role" {
   idms_id     = "<the application's IDMS id>"
-  destination = "urn:ietf:params:scim:schemas:extension:2.0:User:defaultRole"
+  destination = "urn:ietf:params:scim:schemas:extension:2.0:User.defaultRole"
   source      = "jcGroups.attributes.defaultRole"
   source_type = "PATH"
 }
@@ -38,7 +38,7 @@ A mapping is imported by `<idms_id>/<rule_id>`. Rule ids are in the response to 
 
 ### Required
 
-- `destination` (String) The downstream (SCIM) attribute to set, e.g. `urn:ietf:params:scim:schemas:extension:2.0:User:defaultRole`.
+- `destination` (String) The downstream (SCIM) attribute to set, e.g. `urn:ietf:params:scim:schemas:extension:2.0:User.defaultRole`.
 - `idms_id` (String) The application's provisioning (IDMS) id: the id in the `/api/v2/idms/<id>/...` requests the console makes from the application's Provisioning tab. It is not the application id, and no way to derive it from the application id has been found.
 - `source` (String) Where the value comes from. For `PATH`, a JumpCloud attribute path such as `email` or `jcGroups.attributes.myAttribute` (a custom attribute of the user's groups); for `CONSTANT`, the literal value; for `EXPR`, an expression in JumpCloud's mapping language.
 - `source_type` (String) `PATH`, `CONSTANT` or `EXPR`.
@@ -58,5 +58,5 @@ A mapping is imported by `<idms_id>/<rule_id>`. Rule ids are in the response to 
 - Only the `USER` resource type has been exercised. A separate `USER_GROUP` rule type exists in the console and maps a group object, not a user attribute; it is not supported.
 - Creating mappings is serialized per `idms_id` within one Terraform run, so two mappings for the same application can't race past the duplicate-destination check. Separate runs are not coordinated.
 - A rule list that can't be trusted (no numeric `totalCount`, a malformed entry, or fewer rules than `totalCount`) is an error, never an empty or short list, so a bad response can't make a rule look deleted.
-- How a destination is written matters. A destination of the form `urn:ietf:params:scim:schemas:extension:2.0:User:defaultRole` (a colon before the attribute name) was observed to be sent downstream as a schema URN, which a SCIM server may reject. Check the application's SCIM activity log after creating a mapping.
-- This resource has been tested against a mock of the captured requests; it has not been fully verified against the live API.
+- How a destination is written matters. Write a namespaced extension attribute with a **dot** before the attribute name: `urn:ietf:params:scim:schemas:extension:2.0:User.defaultRole`. With a colon (`...:2.0:User:defaultRole`) JumpCloud was observed to send the whole string as a schema URN, and a SCIM server (Snowflake's) rejected user creation with `400 Invalid user schemas`. The dot form was observed to work against that server. Check the application's SCIM activity log after creating a mapping.
+- Verified against a live application: create, read-back (an empty plan afterwards), import, replace (a delete then a create) and delete, with `PATH` sources for a group's custom attribute (`jcGroups.attributes.<name>`), mapped to a user's default role and default warehouse in Snowflake. Not exercised live: `CONSTANT` and `EXPR` sources, and an `applied_on` other than the default.

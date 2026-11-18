@@ -18,7 +18,7 @@ import (
 
 const (
 	testIdmsId       = "idms1"
-	testDefaultRole  = "urn:ietf:params:scim:schemas:extension:2.0:User:defaultRole"
+	testDefaultRole  = "urn:ietf:params:scim:schemas:extension:2.0:User.defaultRole"
 	testGroupAttrSrc = "jcGroups.attributes.snowflakeDefaultRole"
 )
 
@@ -306,7 +306,7 @@ func TestScimAttributeMappingCreateHonorsAppliedOn(t *testing.T) {
 
 	d := scimMappingData(t, map[string]interface{}{
 		"idms_id":     testIdmsId,
-		"destination": "urn:ietf:params:scim:schemas:extension:2.0:User:defaultSecondaryRoles",
+		"destination": "urn:ietf:params:scim:schemas:extension:2.0:User.defaultSecondaryRoles",
 		"source":      "ALL",
 		"source_type": "CONSTANT",
 		"applied_on":  []interface{}{"UPDATE", "CREATE"},
