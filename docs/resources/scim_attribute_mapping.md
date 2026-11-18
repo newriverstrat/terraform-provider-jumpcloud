@@ -45,7 +45,7 @@ A mapping is imported by `<idms_id>/<rule_id>`. Rule ids are in the response to 
 
 ### Optional
 
-- `applied_on` (Set of String) When the rule fires: any of `CREATE` and `UPDATE`. Defaults to both, which is what the console sets.
+- `applied_on` (Set of String) When the rule fires: any of `CREATE` and `UPDATE`. Defaults to both, which is what the console sets. Omit it for the default: an empty set is rejected, not treated as "none".
 
 ### Read-Only
 
@@ -56,4 +56,7 @@ A mapping is imported by `<idms_id>/<rule_id>`. Rule ids are in the response to 
 
 - A rule's `destination` must not already have a mapping: what the API does with two rules for one destination hasn't been observed, so creating one is refused. Remove the existing rule in the console first, or import it.
 - Only the `USER` resource type has been exercised. A separate `USER_GROUP` rule type exists in the console and maps a group object, not a user attribute; it is not supported.
-- This resource has been tested against a mock of the captured requests, not against the live API.
+- Creating mappings is serialized per `idms_id` within one Terraform run, so two mappings for the same application can't race past the duplicate-destination check. Separate runs are not coordinated.
+- A rule list that can't be trusted (no numeric `totalCount`, a malformed entry, or fewer rules than `totalCount`) is an error, never an empty or short list, so a bad response can't make a rule look deleted.
+- How a destination is written matters. A destination of the form `urn:ietf:params:scim:schemas:extension:2.0:User:defaultRole` (a colon before the attribute name) was observed to be sent downstream as a schema URN, which a SCIM server may reject. Check the application's SCIM activity log after creating a mapping.
+- This resource has been tested against a mock of the captured requests; it has not been fully verified against the live API.

@@ -3,9 +3,11 @@ package jumpcloud
 import (
 	"errors"
 	"fmt"
+	"math"
 	"net/http"
 	"sort"
 	"strings"
+	"sync"
 
 	jcapiv2 "github.com/TheJumpCloud/jcapi-go/v2"
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
@@ -19,6 +21,20 @@ const (
 	scimRuleDirection    = "EXPORT"
 	scimRuleResourceType = "USER"
 )
+
+// idmsLocks serializes Create per provisioning config (IDMS id) within this provider
+// process. Terraform runs independent resources in parallel, and Create is a
+// list, check, insert, read-back sequence over one shared rule list: without this, two
+// mappings for the same destination could both pass the duplicate check, or each could
+// mistake the other's new rule for its own. It cannot serialize separate Terraform runs.
+var idmsLocks sync.Map // idms id -> *sync.Mutex
+
+func lockIdms(idmsId string) (unlock func()) {
+	m, _ := idmsLocks.LoadOrStore(idmsId, &sync.Mutex{})
+	mu := m.(*sync.Mutex)
+	mu.Lock()
+	return mu.Unlock
+}
 
 // resourceScimAttributeMapping manages one attribute mapping ("translation
 // rule") on the Provisioning tab of a JumpCloud application that provisions
@@ -86,11 +102,15 @@ func resourceScimAttributeMapping() *schema.Resource {
 			},
 			"applied_on": {
 				Description: "When the rule fires: any of `CREATE` and `UPDATE`. Defaults to " +
-					"both, which is what the console sets.",
+					"both, which is what the console sets. Omit it for the default: an " +
+					"empty set is rejected, not treated as \"none\".",
 				Type:     schema.TypeSet,
 				Optional: true,
 				Computed: true,
 				ForceNew: true,
+				// The SDK reports an empty set as unset, so an explicit `applied_on = []`
+				// would silently become the default of both. Reject it instead.
+				MinItems: 1,
 				Elem: &schema.Schema{
 					Type:         schema.TypeString,
 					ValidateFunc: validation.StringInSlice([]string{"CREATE", "UPDATE"}, false),
@@ -115,25 +135,38 @@ func parseScimMappingId(id string) (idmsId, ruleId string, err error) {
 }
 
 // idmsListTranslationRules lists a provisioning config's translation rules. It
-// fails rather than return a partial list: the list endpoint reports a
-// totalCount, and a rule missing from a truncated list would be mistaken for a
-// deleted one.
+// fails rather than return a list it can't vouch for: a rule missing from a
+// truncated or malformed list would be mistaken for a deleted one (Read would drop it
+// from state, Delete would report success without deleting). So the response must
+// carry a numeric totalCount that equals the number of rule objects returned. An absent
+// or null rule list is accepted only with a totalCount of 0.
 func idmsListTranslationRules(basePath string, headers map[string]string, idmsId string) ([]map[string]interface{}, error) {
 	raw, err := jcGetRaw(basePath, headers, "/idms/"+idmsId+"/translation-rules")
 	if err != nil {
 		return nil, err
 	}
 
+	total, ok := raw["totalCount"].(float64)
+	if !ok || total != math.Trunc(total) || total < 0 {
+		return nil, fmt.Errorf("translation rules list for %s has no valid numeric totalCount; unexpected response shape", idmsId)
+	}
+
 	var rules []map[string]interface{}
-	if list, ok := raw["translationRules"].([]interface{}); ok {
-		for _, item := range list {
-			if rule, ok := item.(map[string]interface{}); ok {
-				rules = append(rules, rule)
+	if rawRules := raw["translationRules"]; rawRules != nil {
+		list, ok := rawRules.([]interface{})
+		if !ok {
+			return nil, fmt.Errorf("translation rules list for %s: translationRules is not a list; unexpected response shape", idmsId)
+		}
+		for i, item := range list {
+			rule, ok := item.(map[string]interface{})
+			if !ok {
+				return nil, fmt.Errorf("translation rules list for %s: entry %d is not an object; unexpected response shape", idmsId, i)
 			}
+			rules = append(rules, rule)
 		}
 	}
-	if total := intOr(raw["totalCount"], len(rules)); total != len(rules) {
-		return nil, fmt.Errorf("translation rules list for %s is incomplete (%d of %d returned); pagination isn't supported", idmsId, len(rules), total)
+	if int(total) != len(rules) {
+		return nil, fmt.Errorf("translation rules list for %s is incomplete (%d of %d returned); pagination isn't supported", idmsId, len(rules), int(total))
 	}
 	return rules, nil
 }
@@ -182,6 +215,10 @@ func resourceScimAttributeMappingCreate(d *schema.ResourceData, meta interface{}
 	if v, ok := d.GetOk("applied_on"); ok {
 		appliedOn = setToStrings(v.(*schema.Set))
 	}
+
+	// Hold the lock across the whole list, check, insert and read-back sequence.
+	unlock := lockIdms(idmsId)
+	defer unlock()
 
 	before, err := idmsListTranslationRules(config.BasePath, headers, idmsId)
 	if err != nil {

@@ -5,10 +5,13 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"sync"
 	"testing"
+	"time"
 
 	jcapiv2 "github.com/TheJumpCloud/jcapi-go/v2"
 	"github.com/hashicorp/terraform-plugin-sdk/helper/schema"
+	"github.com/hashicorp/terraform-plugin-sdk/terraform"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
@@ -26,6 +29,7 @@ const (
 // real provisioning config.
 type fakeIdms struct {
 	t        *testing.T
+	mu       sync.Mutex // guards the fields below; the server handles requests concurrently
 	rules    []map[string]interface{}
 	nextId   int
 	posts    []map[string]interface{}
@@ -33,6 +37,11 @@ type fakeIdms struct {
 	dropAdds bool // accept inserts but never list them
 	// totalOverride, when non-zero, is reported as totalCount.
 	totalOverride int
+	// rawList, when set, is returned as the whole list response instead of the rules.
+	rawList interface{}
+	// postDelay is slept, outside the mutex, before a write is applied. It widens the window
+	// between one client's insert request and the rule appearing in the list.
+	postDelay time.Duration
 }
 
 func newFakeIdms(t *testing.T) *fakeIdms {
@@ -53,7 +62,13 @@ func (f *fakeIdms) start() (*jcapiv2.Configuration, func()) {
 		w.Header().Set("Content-Type", "application/json")
 		switch {
 		case r.Method == http.MethodGet && r.URL.Path == "/idms/"+testIdmsId+"/translation-rules":
+			f.mu.Lock()
+			defer f.mu.Unlock()
 			f.gets++
+			if f.rawList != nil {
+				_ = json.NewEncoder(w).Encode(f.rawList)
+				return
+			}
 			total := len(f.rules)
 			if f.totalOverride != 0 {
 				total = f.totalOverride
@@ -62,6 +77,9 @@ func (f *fakeIdms) start() (*jcapiv2.Configuration, func()) {
 		case r.Method == http.MethodPost && r.URL.Path == "/idms/"+testIdmsId+"/bulk-translation-rules":
 			var body map[string]interface{}
 			require.NoError(f.t, json.NewDecoder(r.Body).Decode(&body))
+			time.Sleep(f.postDelay)
+			f.mu.Lock()
+			defer f.mu.Unlock()
 			f.posts = append(f.posts, body)
 			for _, item := range body["insertTranslationRule"].([]interface{}) {
 				if f.dropAdds {
@@ -111,6 +129,143 @@ func defaultRoleMapping(t *testing.T) *schema.ResourceData {
 
 func TestScimAttributeMappingSchemaIsValid(t *testing.T) {
 	require.NoError(t, resourceScimAttributeMapping().InternalValidate(nil, true))
+}
+
+// The SDK reports an empty set as unset, so an explicit `applied_on = []` would silently
+// become the default of both operations. It must be rejected; omitting it is fine.
+func TestScimAttributeMappingRejectsExplicitlyEmptyAppliedOn(t *testing.T) {
+	base := map[string]interface{}{
+		"idms_id":     testIdmsId,
+		"destination": testDefaultRole,
+		"source":      testGroupAttrSrc,
+		"source_type": "PATH",
+	}
+	validate := func(extra map[string]interface{}) []error {
+		raw := map[string]interface{}{}
+		for k, v := range base {
+			raw[k] = v
+		}
+		for k, v := range extra {
+			raw[k] = v
+		}
+		_, errs := resourceScimAttributeMapping().Validate(terraform.NewResourceConfigRaw(raw))
+		return errs
+	}
+
+	errs := validate(map[string]interface{}{"applied_on": []interface{}{}})
+	require.NotEmpty(t, errs, "an explicitly empty applied_on must be rejected")
+	assert.Contains(t, errs[0].Error(), "applied_on")
+
+	assert.Empty(t, validate(nil), "omitting applied_on selects the default and is valid")
+	assert.Empty(t, validate(map[string]interface{}{"applied_on": []interface{}{"CREATE"}}))
+}
+
+// Create is a list, check, insert, read-back sequence over one shared rule list, and
+// Terraform runs independent resources in parallel. Two creates for the same destination
+// must not both pass the duplicate check. postDelay holds each insert open long enough that
+// without the per-IDMS lock the second create lists before the first rule appears.
+func TestScimAttributeMappingConcurrentCreatesAreSerialized(t *testing.T) {
+	fake := newFakeIdms(t)
+	fake.postDelay = 150 * time.Millisecond
+	config, closeServer := fake.start()
+	defer closeServer()
+
+	sources := []string{"valueA", "valueB"}
+	errs := make([]error, len(sources))
+	var wg sync.WaitGroup
+	for i := range sources {
+		wg.Add(1)
+		go func(i int) {
+			defer wg.Done()
+			d := scimMappingData(t, map[string]interface{}{
+				"idms_id":     testIdmsId,
+				"destination": "custom.attribute",
+				"source":      sources[i],
+				"source_type": "CONSTANT",
+			})
+			errs[i] = resourceScimAttributeMappingCreate(d, config)
+		}(i)
+	}
+	wg.Wait()
+
+	var succeeded, refused int
+	for _, err := range errs {
+		switch {
+		case err == nil:
+			succeeded++
+		case assert.Contains(t, err.Error(), "already has a mapping"):
+			refused++
+		}
+	}
+	assert.Equal(t, 1, succeeded, "exactly one create may succeed")
+	assert.Equal(t, 1, refused, "the other must see the first rule and refuse")
+
+	fake.mu.Lock()
+	defer fake.mu.Unlock()
+	var mapped int
+	for _, rule := range fake.rules {
+		if rule["destination"] == "custom.attribute" {
+			mapped++
+		}
+	}
+	assert.Equal(t, 1, mapped, "only one rule may exist for the destination")
+}
+
+// A response the provider can't vouch for must be an error, not an empty or short list:
+// otherwise Read drops the rule from state and Delete reports success without deleting.
+func TestScimAttributeMappingListRejectsMalformedResponses(t *testing.T) {
+	cases := map[string]struct {
+		raw  interface{}
+		want string
+	}{
+		"missing totalCount":      {map[string]interface{}{"translationRules": []interface{}{}}, "totalCount"},
+		"non-numeric totalCount":  {map[string]interface{}{"totalCount": "1", "translationRules": []interface{}{}}, "totalCount"},
+		"negative totalCount":     {map[string]interface{}{"totalCount": -1, "translationRules": []interface{}{}}, "totalCount"},
+		"fractional totalCount":   {map[string]interface{}{"totalCount": 1.5, "translationRules": []interface{}{}}, "totalCount"},
+		"rules not a list":        {map[string]interface{}{"totalCount": 1, "translationRules": "x"}, "not a list"},
+		"entry not an object":     {map[string]interface{}{"totalCount": 1, "translationRules": []interface{}{"x"}}, "not an object"},
+		"count larger than rules": {map[string]interface{}{"totalCount": 2, "translationRules": []interface{}{map[string]interface{}{"id": "a"}}}, "incomplete"},
+		"rules absent, count > 0": {map[string]interface{}{"totalCount": 3}, "incomplete"},
+	}
+	for name, tc := range cases {
+		t.Run(name, func(t *testing.T) {
+			fake := newFakeIdms(t)
+			fake.rawList = tc.raw
+			config, closeServer := fake.start()
+			defer closeServer()
+
+			_, err := idmsListTranslationRules(config.BasePath, config.DefaultHeader, testIdmsId)
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.want)
+
+			// Read keeps the resource in state, and Delete doesn't pretend it deleted.
+			d := schema.TestResourceDataRaw(t, resourceScimAttributeMapping().Schema, map[string]interface{}{})
+			d.SetId(testIdmsId + "/a")
+			require.Error(t, resourceScimAttributeMappingRead(d, config))
+			assert.Equal(t, testIdmsId+"/a", d.Id(), "state must be kept")
+			require.Error(t, resourceScimAttributeMappingDelete(d, config))
+			assert.Empty(t, fake.posts, "no delete may be sent")
+		})
+	}
+}
+
+func TestScimAttributeMappingListAcceptsAnEmptyListWithZeroCount(t *testing.T) {
+	for name, raw := range map[string]interface{}{
+		"empty list":  map[string]interface{}{"totalCount": 0, "translationRules": []interface{}{}},
+		"null list":   map[string]interface{}{"totalCount": 0, "translationRules": nil},
+		"absent list": map[string]interface{}{"totalCount": 0},
+	} {
+		t.Run(name, func(t *testing.T) {
+			fake := newFakeIdms(t)
+			fake.rawList = raw
+			config, closeServer := fake.start()
+			defer closeServer()
+
+			rules, err := idmsListTranslationRules(config.BasePath, config.DefaultHeader, testIdmsId)
+			require.NoError(t, err)
+			assert.Empty(t, rules)
+		})
+	}
 }
 
 // The body mirrors the captured console request: one inserted rule with
